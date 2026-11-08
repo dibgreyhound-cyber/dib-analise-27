@@ -153,7 +153,8 @@ def extrair_dados(url):
                 }
                 registros.append(reg)
                 
-        if not registros: return None, None, "Erro ao processar histórico."
+        if not registros: 
+            return None, None, "Erro ao processar histórico."
         return pd.DataFrame(registros), meta, None
     except Exception as e:
         return None, None, f"Erro na extração: {str(e)}"
@@ -164,7 +165,6 @@ def extrair_dados(url):
 def render_avb_table(v, d, forca):
     cols = ["AvB", "Overall", "Cat", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca", "Força"]
     
-    # Função para calcular a diferença e formatar
     def fmt_diff(val_d, val_v, is_int=False):
         try:
             diff = float(val_d) - float(val_v)
@@ -174,7 +174,6 @@ def render_avb_table(v, d, forca):
         except:
             return str(val_d)
 
-    # Linha do Vencedor
     row_v = {
         "AvB": f"⭐ {v['Trap']} {v['Galgo']}", 
         "Overall": round(v['Overall'], 2), 
@@ -194,7 +193,6 @@ def render_avb_table(v, d, forca):
         "Força": round(forca, 2)
     }
     
-    # Linha do Desafiante (com a diferença)
     row_d = {
         "AvB": f"   {d['Trap']} {d['Galgo']}", 
         "Overall": fmt_diff(d['Overall'], v['Overall']), 
@@ -214,11 +212,9 @@ def render_avb_table(v, d, forca):
         "Força": ""
     }
     
-    # Linha Separadora (Traço)
     row_sep = {c: "-" for c in cols}
     row_sep["AvB"] = "-"
 
-    # Montando o DataFrame
     df = pd.DataFrame([row_v, row_d, row_sep])
     return df
 
@@ -257,7 +253,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         ultima_geral = group.iloc[0]
                         
                         validas = group[group['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
-                        if validas.empty: continue 
+                        if validas.empty: 
+                            continue 
                         
                         ultima_oficial = validas.iloc[0]
                         
@@ -376,7 +373,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                                     if f >= 50: avbs_princ.append((v, d, f))
                                     elif f >= 40: avbs_sec.append((v, d, f))
 
-                        # Exibição das tabelas comparativas
                         st.markdown("---")
                         
                         st.markdown("### 🎯 Planilha de AVB do Alvo")
@@ -384,18 +380,24 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             for v, d, f in avbs_alvo:
                                 df_avb = render_avb_table(v, d, f)
                                 st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: st.info("Nenhum confronto de Alvo gerado.")
+                        else: 
+                            st.info("Nenhum confronto de Alvo gerado.")
 
                         st.markdown("### ⚔️ Planilha de AVB Principal (Elite)")
                         if avbs_princ:
                             for v, d, f in avbs_princ:
                                 df_avb = render_avb_table(v, d, f)
                                 st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: st.info("Nenhum AVB Principal gerado (Força ≥ 50.0).")
+                        else: 
+                            st.info("Nenhum AVB Principal gerado (Força ≥ 50.0).")
 
                         st.markdown("### 🛡️ Planilha de AVB Secundário")
                         if avbs_sec:
                             for v, d, f in avbs_sec:
                                 df_avb = render_avb_table(v, d, f)
                                 st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: st.info("Nenhum AVB Secundário gerado (F
+                        else: 
+                            st.info("Nenhum AVB Secundário gerado (Força 40.0 a 49.9).")
+
+            except Exception as e:
+                st.error(f"Erro no processamento: 
