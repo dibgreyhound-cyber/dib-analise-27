@@ -61,7 +61,6 @@ def extrair(url):
         
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
         
-        # Lista de proxies para não ser bloqueado
         proxies = [
             f"https://api.allorigins.win/raw?url={requests.utils.quote(api_url)}",
             f"https://corsproxy.io/?url={requests.utils.quote(api_url)}",
@@ -83,7 +82,6 @@ def extrair(url):
         if data is None:
             return None, None, "Falha na conexão (proxies fora do ar)."
             
-        # Pega os dados EXATOS da corrida de hoje
         meta = {"pista": "Desconhecida", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5", "dist": "462"}
         
         race_info = {}
@@ -105,15 +103,14 @@ def extrair(url):
                     meta["hora"] = match.group(1)
                     meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
             
-            # Pega a distância oficial da prova de hoje (ex: "462m" -> "462")
-            dist_raw = str(race_info.get("distance", "462"))
-            meta["dist"] = re.sub(r'[^\d]', '', dist_raw)
+            # 🚨 CORREÇÃO AQUI: Busca 'dist' ou 'distance'
+            dist_raw = race_info.get("dist") or race_info.get("distance") or "462"
+            meta["dist"] = re.sub(r'[^\d]', '', str(dist_raw))
             
             cls = str(race_info.get("raceClass", meta["cat"])).upper()
             c_match = re.search(r'A\d+', cls)
             if c_match: meta["cat"] = c_match.group(0)
         
-        # Extrai o histórico dos galgos
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs: return None, None, "Sem galgos no arquivo."
         
@@ -129,9 +126,10 @@ def extrair(url):
             if not forms: continue
             
             for c in forms:
-                dist_c = re.sub(r'[^\d]', '', str(c.get("distance", "0")))
+                # 🚨 CORREÇÃO AQUI: Busca 'dist' ou 'distance' dentro do histórico
+                dist_c_raw = c.get("dist") or c.get("distance") or "0"
+                dist_c = re.sub(r'[^\d]', '', str(dist_c_raw))
                 
-                # Ignora a corrida se não for a distância de hoje
                 if dist_c != meta["dist"]:
                     continue
                     
@@ -141,7 +139,6 @@ def extrair(url):
                         if isinstance(v, str) and re.match(r'^([A-Z]\d{1,2})$', v.strip().upper()):
                             g = v.strip().upper(); break
                             
-                # Trata valores nulos/strings vazias de tempos
                 split_val = c.get("sectionalTime", 0)
                 caltm_val = c.get("calcRTimes", 0)
                 try: split_f = float(split_val) if split_val else 0.0
@@ -198,7 +195,6 @@ if st.button("Analisar", type="primary") and url:
                 cat_h = meta["cat"]
                 d_h = meta["dist"]
                 
-                # Filtro duplo de segurança: apenas tempos válidos (>0)
                 df = df_b[df_b["CalTm"] > 0].copy()
                 
                 if df.empty: 
@@ -216,9 +212,7 @@ if st.button("Analisar", type="primary") and url:
                         u_g = g.iloc[0]
                         val = g[g['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
                         
-                        # Se o cara só tem corridas T ou HP na distância, ele é bloqueado
-                        if val.empty: 
-                            continue
+                        if val.empty: continue
                             
                         u_o = val.iloc[0]
                         wa = lambda c: np.average(val[c], weights=[5,4,3,2,1][:len(val)])
@@ -264,15 +258,7 @@ if st.button("Analisar", type="primary") and url:
                         st.error("Os galgos não têm histórico de corridas oficiais nesta distância.")
                     else:
                         agg = pd.DataFrame(res)
-                        
-                        # Cálculo do Overall
-                        agg["Overall"] = (
-                            calc_prop(agg["Time_Ajust"], 40, 5) + 
-                            calc_prop(agg["M_Time"], 30, 5) + 
-                            calc_prop(agg["M_Split"], 15, 2) + 
-                            calc_prop(agg["Ritmo"], 15, 2) + 
-                            agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"]
-                        )
+                        agg["Overall"] = (calc_prop(agg["Time_Ajust"], 40, 5) + calc_prop(agg["M_Time"], 30, 5) + calc_prop(agg["M_Split"], 15, 2) + calc_prop(agg["Ritmo"], 15, 2) + agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"])
                         agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
                         
                         t3_s = agg["M_Split"].nsmallest(3).tolist()
@@ -287,7 +273,6 @@ if st.button("Analisar", type="primary") and url:
                         cols = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
                         
-                        # Lógica de Matchmaking e AVB
                         elig = agg[~agg["Block"]].reset_index(drop=True)
                         cf = lambda v, d: (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
                         
