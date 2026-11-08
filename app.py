@@ -9,7 +9,7 @@ st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
 st.title("🐾 Análise DIB 2.7")
 
 # =========================================================
-# 🔧 FUNÇÕES AUXILIARES
+# 🔧 FUNÇÕES AUXILIARES E CÁLCULOS
 # =========================================================
 def parse_going(g):
     if pd.isna(g) or g is None: return 0.0
@@ -49,50 +49,25 @@ def calc_prop_points(series, max_pts, min_pts):
     s = pd.to_numeric(series, errors="coerce").fillna(series.median())
     if s.max() == s.min(): return pd.Series([(max_pts+min_pts)/2] * len(s), index=s.index)
     min_val, max_val = s.min(), s.max()
+    # Quanto menor o tempo, maior a pontuação
     return max_pts - ((s - min_val) / (max_val - min_val) * (max_pts - min_pts))
 
 # =========================================================
-# EXTRAIR DADOS (API RACING POST) - BLINDADO
+# EXTRAIR DADOS (API RACING POST)
 # =========================================================
 def extrair_dados(url):
     try:
-        race_id_match = re.search(r"race_id=(\d+)", url)
-        r_date_match = re.search(r"r_date=([\d-]+)", url)
-
-        if not race_id_match or not r_date_match:
-            st.error("Link inválido. Certifique-se de que copiou o link completo com 'race_id' e 'r_date'.")
-            return None
-
-        race_id = race_id_match.group(1)
-        r_date_str = r_date_match.group(1)
+        race_id = re.search(r"race_id=(\d+)", url).group(1)
+        r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
-        
-        # Headers melhorados para evitar bloqueio
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://greyhoundbet.racingpost.com/",
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        
-        response = requests.get(api_url, headers=headers, timeout=15)
-        
-        # Verifica se o site respondeu com erro
-        if response.status_code != 200:
-            st.error(f"Erro no site: {response.status_code}. O site pode ter bloqueado a requisição.")
-            return None
-            
-        try:
-            data = response.json()
-        except ValueError:
-            st.error("O site não retornou dados válidos (JSON). Verifique se o link expirou ou se o site bloqueou o robô.")
-            return None
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        data = requests.get(api_url, headers=headers, timeout=15).json()
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado de galgo encontrado no link.")
+            st.warning("Nenhum dado encontrado.")
             return None
 
         registros = []
@@ -103,23 +78,21 @@ def extrair_dados(url):
             forms = dog.get("forms", [])
             if not forms: continue
 
+            data_ultima = datetime.strptime(forms[0].get("raceTime", r_date_str)[:10], "%Y-%m-%d")
+            dias = (r_date_obj - data_ultima).days
+
             for corrida in forms:
-                grade_val = "A6"
+                # Extração robusta da grade
+                grade = "A6"
                 for k in ["grade", "gr", "raceGrade", "grde", "class", "cls"]:
                     if k in corrida and corrida[k]:
-                        val = str(corrida[k]).upper().strip()
-                        match = re.search(r'^[A-Z]\d{1,2}', val)
-                        if match:
-                            grade_val = match.group(0)
+                        grade = str(corrida[k]).upper().strip()
+                        break
+                else:
+                    for k, v in corrida.items():
+                        if isinstance(v, str) and re.match(r'^[A-Z]\d{1,2}$', v.strip().upper()):
+                            grade = v.strip().upper()
                             break
-                
-                data_str = str(corrida.get("raceTime", ""))[:10]
-                try:
-                    data_obj = datetime.strptime(data_str, "%Y-%m-%d")
-                    dias = (r_date_obj - data_obj).days
-                except:
-                    data_obj = None
-                    dias = 0
 
                 reg = {
                     "Galgo": nome, "Trap": trap, 
@@ -130,8 +103,8 @@ def extrair_dados(url):
                     "Fin": str(corrida.get("outcomeDesc", "6")),
                     "Remarks": corrida.get("closeUpCmnt", ""), 
                     "Peso_Atual": peso_atual,
-                    "Dias": dias, "Grade": grade_val, 
-                    "Data_Obj": data_obj,
+                    "Dias": dias, "Grade": grade, 
+                    "Data_Corrida": corrida.get("raceTime", "")[:10],
                     "Distancia": int(corrida.get("dist", 0))
                 }
                 registros.append(reg)
@@ -152,19 +125,15 @@ if st.button("Analisar Corrida", type="primary") and url_input:
         
         if df_bruto is not None:
             try:
-                # Filtrar distância exata e remover corridas sem tempo
+                # 1. Filtrar distância exata e corridas oficiais
                 dist_hoje = df_bruto["Distancia"].iloc[0]
                 df = df_bruto[(df_bruto["Distancia"] == dist_hoje) & (df_bruto["CalTm"] > 0)].copy()
-                
-                # Ordenar por data decrescente
-                df = df.sort_values("Data_Obj", ascending=False)
-
-                # Filtrar apenas classes A oficiais
-                df = df[df["Grade"].str.match(r'^A\d{1,2}$', na=False)]
+                df = df[df["Grade"].str.match(r'^[AD]\d{1,2}$', na=False)]
 
                 if df.empty:
                     st.warning("Nenhum galgo com corrida oficial válida nesta distância.")
                 else:
+                    # 2. Cálculos por Corrida (Going, Tráfego, Bends)
                     df["Going_adj"] = df["Going"].apply(parse_going)
                     df["Traffic_adj"] = df["Remarks"].apply(parse_traffic)
                     df["Time_Ajust"] = df["CalTm"] - df["Going_adj"] - df["Traffic_adj"]
@@ -174,14 +143,18 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     df["Bend_1"] = bends_split[0]
                     df["Fin_num"] = pd.to_numeric(df["Fin"].str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
+                    # 3. Agrupamento e Médias Ponderadas
+                    def weighted_avg(group, col):
+                        weights = np.array([5, 4, 3, 2, 1][:len(group)])
+                        return np.average(group[col], weights=weights)
+
                     res = []
                     for nome, group in df.groupby("Galgo"):
-                        group = group.sort_values("Data_Obj", ascending=False)
+                        group = group.sort_values("Data_Corrida", ascending=False)
                         ult = group.iloc[0]
                         
-                        w = np.array([5, 4, 3, 2, 1][:len(group)])
-                        m_time = np.average(group["CalTm"], weights=w)
-                        m_split = np.average(group["Split"], weights=w)
+                        m_time = weighted_avg(group, "CalTm")
+                        m_split = weighted_avg(group, "Split")
                         m_ajust = group["Time_Ajust"].mean()
                         ritmo = m_time - m_split
                         
@@ -196,24 +169,17 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
+                        # 4. Categoria
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ult["Grade"])
                         n_h = int(match_h.group(1)) if match_h else 6
                         n_u = int(match_u.group(1)) if match_u else 6
-                        
                         cat_base = get_cat_base(classe_hoje)
+                        cat_mod = 2 if n_u < n_h else (-2 if n_u > n_h else 0)
                         
-                        if n_u < n_h:
-                            cat_mod = 2 # Desceu
-                        elif n_u > n_h:
-                            cat_mod = -2 # Subiu
-                        else:
-                            cat_mod = 0
-                            
-                        cat_final = cat_base + cat_mod
-                        
+                        # 5. Fatores Táticos
                         f_mom = 3.0 if ult["Fin"] == "1st" else (-2.0 if ult["Fin_num"] >= 4 and n_u <= n_h else 0.0)
-                        f_peso = 0.0
+                        f_peso = -5.0 if abs(ult["Peso_Atual"] - ult["Peso_Atual"]) > 2.0 else 0.0
                         f_dias = -5.0 if ult["Dias"] < 4 else (-3.0 if 29 <= ult["Dias"] <= 45 else (-5.0 if ult["Dias"] > 45 else 0.0))
                         
                         rems = str(ult["Remarks"]).upper()
@@ -224,17 +190,20 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         
                         f_total = f_mom + f_peso + f_dias + f_rem
                         
+                        # 6. Perfil
                         t_count = group["Has_Traffic"].sum()
                         perfil = "✅ Limpo" if t_count <= 1 else ("⚠️ Irregular" if t_count == 2 else "🔴 Trombador")
                         p_pts = 10 if t_count <= 1 else (5 if t_count == 2 else 2.5)
                         
+                        # 7. Travas
                         conf = len(group) * 20
                         block = ult["Grade"].startswith("T") or conf < 60
 
                         res.append({
                             "Trap": ult["Trap"], "Galgo": nome, 
-                            "Cat": cat_final, "Mod": cat_mod,
-                            "Fatores": f_total, "Perfil": perfil, "P_pts": p_pts,
+                            "Cat": cat_base + cat_mod, "Cat_Str": f"{cat_base+cat_mod}",
+                            "Mod": cat_mod, "Fatores": f_total,
+                            "Perfil": perfil, "P_pts": p_pts,
                             "Grade": "·".join(group["Grade"].head(5)), 
                             "Peso": ult["Peso_Atual"], "Dias": ult["Dias"],
                             "Split": ult["Split"], "Time": ult["CalTm"], "Time_Ajust": m_ajust, 
@@ -245,6 +214,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     
                     agg = pd.DataFrame(res)
                     
+                    # 8. Base de Velocidade (Pontos)
                     pts_ajust = calc_prop_points(agg["Time_Ajust"], 40, 5)
                     pts_mtime = calc_prop_points(agg["M_Time"], 30, 5)
                     pts_msplit = calc_prop_points(agg["M_Split"], 15, 2)
@@ -252,22 +222,27 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     
                     agg["Vel_pts"] = pts_ajust + pts_mtime + pts_msplit + pts_ritmo
                     
+                    # 9. Recuperação
                     recup_pts = (5 + (agg["Recup"] / 10)).clip(0, 10)
                     
+                    # 10. Overall Final
                     agg["Overall"] = agg["Vel_pts"] + agg["Cat"] + agg["P_pts"] + recup_pts + agg["Fatores"]
                     agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
                     
+                    # 11. Trava de Alvo (DIB 2.5)
                     top3_splits = agg["M_Split"].nsmallest(3).tolist()
                     agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                     
+                    # 12. Exibição Projeção
                     st.markdown(f"### 🏁 {classe_hoje} · {dist_hoje}m")
                     medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
                     ranking = " > ".join([f"{medals[i]} [{row['Trap']}] {row['Galgo']}" for i, row in agg.iterrows()])
                     st.info(ranking)
 
-                    cols = ["Trap", "Galgo", "Overall", "Cat", "Mod", "Fatores", "Perfil", "Grade", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Recup_Str", "Confianca"]
+                    cols = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                     st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
 
+                    # 13. Matchmaking e AVBs
                     elegiveis = agg[~agg["Block"]].reset_index(drop=True)
                     
                     def calc_forca(v, d):
@@ -275,11 +250,13 @@ if st.button("Analisar Corrida", type="primary") and url_input:
 
                     avbs_alvo, avbs_princ, avbs_sec = [], [], []
                     
+                    # AVB Alvo
                     for _, tgt in agg[agg["Is_Target"]].iterrows():
                         for _, atk in elegiveis[elegiveis["Overall"] > tgt["Overall"]].iterrows():
                             f = calc_forca(atk, tgt)
                             if f >= 50: avbs_alvo.append((atk, tgt, f))
 
+                    # AVB Elite (Principal e Secundário)
                     for i in range(min(3, len(elegiveis))):
                         v = elegiveis.iloc[i]
                         for j in [i+2, i+3]:
@@ -290,6 +267,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                                 if f >= 50: avbs_princ.append((v, d, f))
                                 elif f >= 40: avbs_sec.append((v, d, f))
 
+                    # Exibição AVB Alvo
                     st.markdown("### 🎯 Planilha de AVB do Alvo")
                     if avbs_alvo:
                         for v, d, f in avbs_alvo:
@@ -297,12 +275,14 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             st.success(f"{star}**[{v['Trap']}] {v['Galgo']}** vence 🎯 **[{d['Trap']}] {d['Galgo']}** (Força: {f:.2f})")
                     else: st.info("Nenhum AVB de Alvo.")
 
+                    # Exibição AVB Principal
                     st.markdown("### 🎯 Planilha de AVB Principal")
                     if avbs_princ:
                         for v, d, f in avbs_princ:
                             st.success(f"**[{v['Trap']}] {v['Galgo']}** vence **[{d['Trap']}] {d['Galgo']}** (Força: {f:.2f})")
                     else: st.info("Nenhum AVB Principal.")
 
+                    # Exibição AVB Secundário
                     st.markdown("### 🎯 Planilha de AVB Secundário")
                     if avbs_sec:
                         for v, d, f in avbs_sec:
