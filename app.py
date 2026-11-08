@@ -8,8 +8,11 @@ from datetime import datetime
 st.set_page_config(page_title="DIB 2.7", layout="wide")
 st.title("🐾 Análise DIB 2.7")
 
+# =========================================================
+# 🔧 FUNÇÕES AUXILIARES
+# =========================================================
 def parse_going(g):
-    if pd.isna(g): return 0.0
+    if pd.isna(g) or not g: return 0.0
     g = str(g).strip().upper().replace(" ", "")
     if g in ["N", "NORMAL"]: return 0.0
     m = re.match(r"([+-]?)(\d+)", g)
@@ -47,6 +50,9 @@ def calc_prop(s, max_p, min_p):
 def get_emoji(t):
     return {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}.get(int(t), str(t))
 
+# =========================================================
+# 🔍 EXTRAÇÃO DE DADOS
+# =========================================================
 def extrair(url):
     try:
         rid = re.search(r"race_id=(\d+)", url).group(1)
@@ -55,6 +61,7 @@ def extrair(url):
         
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
         
+        # Lista de proxies para não ser bloqueado
         proxies = [
             f"https://api.allorigins.win/raw?url={requests.utils.quote(api_url)}",
             f"https://corsproxy.io/?url={requests.utils.quote(api_url)}",
@@ -66,7 +73,7 @@ def extrair(url):
         for proxy_url in proxies:
             try:
                 h = {"User-Agent": "Mozilla/5.0"}
-                res = requests.get(proxy_url, headers=h, timeout=20)
+                res = requests.get(proxy_url, headers=h, timeout=15)
                 if res.status_code == 200:
                     data = res.json()
                     break
@@ -74,57 +81,95 @@ def extrair(url):
                 continue
         
         if data is None:
-            return None, None, "Todos os proxies falharam. O Racing Post está bloqueando ou fora do ar."
+            return None, None, "Falha na conexão (proxies fora do ar)."
             
-        meta = {"pista": "KINSLEY", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5"}
+        # Pega os dados EXATOS da corrida de hoje
+        meta = {"pista": "Desconhecida", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5", "dist": "462"}
+        
+        race_info = {}
         try:
             for r in data.get('card', {}).get('races', []):
                 if str(r.get('raceId')) == str(rid):
-                    meta["pista"] = str(r.get("course", meta["pista"])).upper()
-                    meta["num"] = str(r.get("raceNo", meta["num"]))
-                    tm = str(r.get("time", ""))
-                    if tm:
-                        match = re.search(r'(\d{2}:\d{2})', tm)
-                        if match:
-                            meta["hora"] = match.group(1)
-                            meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
-                    cls = str(r.get("raceClass", meta["cat"])).upper()
-                    c_match = re.search(r'A\d+', cls)
-                    if c_match: meta["cat"] = c_match.group(0)
+                    race_info = r
                     break
-        except: 
+        except:
             pass
+            
+        if race_info:
+            meta["pista"] = str(race_info.get("course", meta["pista"])).upper()
+            meta["num"] = str(race_info.get("raceNo", meta["num"]))
+            tm = str(race_info.get("time", ""))
+            if tm:
+                match = re.search(r'(\d{2}:\d{2})', tm)
+                if match:
+                    meta["hora"] = match.group(1)
+                    meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
+            
+            # Pega a distância oficial da prova de hoje (ex: "462m" -> "462")
+            dist_raw = str(race_info.get("distance", "462"))
+            meta["dist"] = re.sub(r'[^\d]', '', dist_raw)
+            
+            cls = str(race_info.get("raceClass", meta["cat"])).upper()
+            c_match = re.search(r'A\d+', cls)
+            if c_match: meta["cat"] = c_match.group(0)
         
+        # Extrai o histórico dos galgos
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs: return None, None, "Sem galgos no arquivo."
         
-        regs, dist = [], "480"
+        regs = []
         total = len(dogs)
         for dog in dogs:
-            n, t, p_card = dog.get("dogName", ""), int(dog.get("trapNum", 0)), float(dog.get("weight", 0) or 0)
+            n, t = dog.get("dogName", ""), int(dog.get("trapNum", 0))
+            p_card_val = dog.get("weight", 0)
+            try: p_card = float(p_card_val) if p_card_val else 0.0
+            except: p_card = 0.0
+            
             forms = dog.get("forms", [])
             if not forms: continue
-            dist = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
+            
             for c in forms:
+                dist_c = re.sub(r'[^\d]', '', str(c.get("distance", "0")))
+                
+                # Ignora a corrida se não for a distância de hoje
+                if dist_c != meta["dist"]:
+                    continue
+                    
                 g = c.get("gr") or c.get("grade") or "A5"
                 if not re.match(r'^A\d+', str(g)):
                     for v in c.values():
                         if isinstance(v, str) and re.match(r'^([A-Z]\d{1,2})$', v.strip().upper()):
                             g = v.strip().upper(); break
+                            
+                # Trata valores nulos/strings vazias de tempos
+                split_val = c.get("sectionalTime", 0)
+                caltm_val = c.get("calcRTimes", 0)
+                try: split_f = float(split_val) if split_val else 0.0
+                except: split_f = 0.0
+                try: caltm_f = float(caltm_val) if caltm_val else 0.0
+                except: caltm_f = 0.0
+
                 regs.append({
                     "Galgo": n, "Trap_Num": t, "Trap": get_emoji(t),
-                    "Split": float(c.get("sectionalTime", 0) or 0), "CalTm": float(c.get("calcRTimes", 0) or 0), 
+                    "Split": split_f, "CalTm": caltm_f, 
                     "Going": c.get("goingType", "N"), "Bends": c.get("bndPos", "4444"), 
                     "Fin": str(c.get("outcomeDesc", "6")), "Remarks": c.get("closeUpCmnt", ""), 
                     "Peso_Atual_Card": p_card, "Peso_Corrida": float(c.get("weight", 0) or 0),
                     "Dias": (d_obj - datetime.strptime(c.get("raceTime", dt)[:10], "%Y-%m-%d")).days, 
                     "Grade": str(g), "Data_Corrida": c.get("raceTime", "")[:10], 
-                    "Distancia": re.sub(r'[^\d]', '', str(c.get("distance", "480"))), "Total_Caes": total
+                    "Total_Caes": total
                 })
+                
+        if not regs:
+            return None, None, f"Nenhum dos galgos possui histórico recente na distância de {meta['dist']}m."
+            
         return pd.DataFrame(regs), meta, None
     except Exception as e: 
         return None, None, str(e)
 
+# =========================================================
+# 📊 RENDERIZAÇÃO AVB
+# =========================================================
 def render_avb(v, d, f):
     cols = ["AvB", "Overall", "Cat", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca", "Força"]
     def fmt(x, y, i=False):
@@ -132,55 +177,77 @@ def render_avb(v, d, f):
             diff = float(x) - float(y)
             return f"{int(x)} ({int(diff):+d})" if i else f"{float(x):.2f} ({diff:+.2f})"
         except: return str(x)
+    
     rv = {"AvB": f"⭐ {v['Trap']} {v['Galgo']}", "Overall": round(v['Overall'], 2), "Cat": v['Cat'], "Perfil": v['Perfil'], "Histórico": v['Histórico'], "Peso": v['Peso'], "Dias": v['Dias'], "Split": round(v['Split'], 2), "Time": round(v['Time'], 2), "Time_Ajust": round(v['Time_Ajust'], 2), "M_Split": round(v['M_Split'], 2), "M_Time": round(v['M_Time'], 2), "Ritmo": round(v['Ritmo'], 2), "Recup_Str": v['Recup_Str'], "Confianca": f"{v['Confianca']}%", "Força": round(f, 2)}
     rd = {"AvB": f"   {d['Trap']} {d['Galgo']}", "Overall": fmt(d['Overall'], v['Overall']), "Cat": fmt(d['Cat'], v['Cat'], True), "Perfil": d['Perfil'], "Histórico": d['Histórico'], "Peso": fmt(d['Peso'], v['Peso']), "Dias": fmt(d['Dias'], v['Dias'], True), "Split": fmt(d['Split'], v['Split']), "Time": fmt(d['Time'], v['Time']), "Time_Ajust": fmt(d['Time_Ajust'], v['Time_Ajust']), "M_Split": fmt(d['M_Split'], v['M_Split']), "M_Time": fmt(d['M_Time'], v['M_Time']), "Ritmo": fmt(d['Ritmo'], v['Ritmo']), "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)", "Força": ""}
     sep = {c: "-" for c in cols}; sep["AvB"] = "-"
     return pd.DataFrame([rv, rd, sep])
 
-url = st.text_input("Link da corrida")
+# =========================================================
+# 🖥️ INTERFACE PRINCIPAL
+# =========================================================
+url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
 if st.button("Analisar", type="primary") and url:
-    with st.spinner("Buscando dados via Proxy..."):
+    with st.spinner("Buscando dados e filtrando distância..."):
         df_b, meta, err = extrair(url)
+        
         if err: 
             st.error(err)
         elif df_b is not None and not df_b.empty:
             try:
-                cat_h, d_h = meta["cat"], df_b["Distancia"].iloc[0]
-                df = df_b[(df_b["Distancia"] == d_h) & (df_b["CalTm"] > 0)].copy()
+                cat_h = meta["cat"]
+                d_h = meta["dist"]
+                
+                # Filtro duplo de segurança: apenas tempos válidos (>0)
+                df = df_b[df_b["CalTm"] > 0].copy()
+                
                 if df.empty: 
-                    st.warning("Sem corridas válidas.")
+                    st.warning("Sem corridas válidas (tempos zerados) nesta distância.")
                 else:
                     df["Time_Ajust"] = df["CalTm"] - df["Going"].apply(parse_going) - df["Remarks"].apply(parse_traffic)
                     df["Has_Traffic"] = df["Remarks"].apply(is_traffic)
                     b_s = df["Bends"].apply(lambda x: pd.Series(get_bends(x)))
                     df["Bend_1"] = b_s[0]
                     df["Fin_num"] = pd.to_numeric(df["Fin"].str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
+                    
                     res = []
                     for n, g in df.groupby("Galgo"):
                         g = g.sort_values("Data_Corrida", ascending=False)
                         u_g = g.iloc[0]
                         val = g[g['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
-                        if val.empty: continue
+                        
+                        # Se o cara só tem corridas T ou HP na distância, ele é bloqueado
+                        if val.empty: 
+                            continue
+                            
                         u_o = val.iloc[0]
                         wa = lambda c: np.average(val[c], weights=[5,4,3,2,1][:len(val)])
                         m_t, m_s = wa("CalTm"), wa("Split")
+                        
                         clean = val[~val["Has_Traffic"]]
                         rec_med = ((clean["Bend_1"] - clean["Fin_num"]) / g["Total_Caes"].iloc[0] * 100).mean() if not clean.empty else 0.0
                         rec_str = f"{rec_med:.2f}% ({(clean['Bend_1'] > clean['Fin_num']).sum()}/{(clean['Bend_1'] < clean['Fin_num']).sum()})" if not clean.empty else "0.00% (0/0)"
-                        m_h = re.search(r'A(\d+)', cat_h); m_u = re.search(r'A(\d+)', u_o["Grade"])
+                        
+                        m_h = re.search(r'A(\d+)', cat_h)
+                        m_u = re.search(r'A(\d+)', u_o["Grade"])
                         n_h = int(m_h.group(1)) if m_h else 5
                         n_u = int(m_u.group(1)) if m_u else 5
+                        
                         c_b = get_cat(cat_h)
                         c_m = 2 if n_u < n_h else (-2 if n_u > n_h else 0)
+                        
                         f_m = 3.0 if u_o["Fin_num"] == 1 else (-2.0 if u_o["Fin_num"] >= 4 and n_u >= n_h else 0.0)
                         d_p = abs(u_g["Peso_Atual_Card"] - u_o["Peso_Corrida"])
                         f_p = -5.0 if d_p > 2.0 else (-2.0 if 1.1 <= d_p <= 1.9 else 0.0)
                         f_d = -5.0 if u_g["Dias"] < 4 else (-3.0 if 29 <= u_g["Dias"] <= 45 else (-5.0 if u_g["Dias"] > 45 else 0.0))
+                        
                         rms = str(u_o["Remarks"]).upper()
                         f_r = (1.5 if "EP" in rms or "LD" in rms else 0) + (5.0 if "CLRRN" in rms else 0) - (10.0 if "SAW" in rms else 0) - (7.0 if "CRD1" in rms or "BMP1" in rms else 0)
+                        
                         t_c = val["Has_Traffic"].sum()
                         perf = "✅ Limpo" if t_c <= 1 else ("⚠️ Irregular" if t_c == 2 else "🔴 Trombador")
                         p_p = 10 if t_c <= 1 else (5 if t_c == 2 else 2.5)
+                        
                         cnf = len(val) * 20
                         blk = u_g["Grade"].startswith("T") or cnf < 60
                         
@@ -192,19 +259,35 @@ if st.button("Analisar", type="primary") and url:
                             "Time_Ajust": val["Time_Ajust"].mean(), "M_Split": m_s, "M_Time": m_t, "Ritmo": m_t - m_s, 
                             "Recup": rec_med, "Recup_Str": rec_str, "Confianca": cnf, "Block": blk
                         })
-                    if res:
+                        
+                    if not res:
+                        st.error("Os galgos não têm histórico de corridas oficiais nesta distância.")
+                    else:
                         agg = pd.DataFrame(res)
-                        agg["Overall"] = (calc_prop(agg["Time_Ajust"], 40, 5) + calc_prop(agg["M_Time"], 30, 5) + calc_prop(agg["M_Split"], 15, 2) + calc_prop(agg["Ritmo"], 15, 2) + agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"])
+                        
+                        # Cálculo do Overall
+                        agg["Overall"] = (
+                            calc_prop(agg["Time_Ajust"], 40, 5) + 
+                            calc_prop(agg["M_Time"], 30, 5) + 
+                            calc_prop(agg["M_Split"], 15, 2) + 
+                            calc_prop(agg["Ritmo"], 15, 2) + 
+                            agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"]
+                        )
                         agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
+                        
                         t3_s = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > t3_s[-1]) & (agg["Recup"] <= 0)
                         
                         st.markdown(f"### 🏁 {meta['pista']} {meta['hora']} (BR {meta['br']}) · Race {meta['num']} · {cat_h} · {d_h}m")
-                        st.info(" > ".join([f"{['🥇','🥈','🥉','4º','5º','6º'][i]} {r['Trap']} {r['Galgo'].replace('[BLOQUEADO] ', '')}" for i, r in agg.iterrows()]))
+                        
+                        medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
+                        ranking = " > ".join([f"{medals[i]} {row['Trap']} {row['Galgo'].replace('[BLOQUEADO] ', '')}" for i, row in agg.iterrows()])
+                        st.info(ranking)
                         
                         cols = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
                         
+                        # Lógica de Matchmaking e AVB
                         elig = agg[~agg["Block"]].reset_index(drop=True)
                         cf = lambda v, d: (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
                         
