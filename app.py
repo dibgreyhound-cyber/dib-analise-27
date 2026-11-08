@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (PISTA, HORA E CLASSE AUTOMÁTICOS)
+# EXTRAIR DADOS (BLINDADO CONTRA ERROS DE CABEÇALHO)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -64,7 +64,8 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=meeting,race,form"
+        # Pede os blocos de metadados (card) e do histórico (form)
+        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=card,form"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -79,18 +80,21 @@ def extrair_dados(url):
 
         data = response.json()
         
-        # --- BUSCA EXATA DOS METADADOS DA CORRIDA DE HOJE ---
-        race_info = data.get("race", {})
-        if not race_info:
-            for r in data.get("meeting", {}).get("races", []):
-                if str(r.get("raceId")) == str(race_id):
+        # --- BUSCA EXATA DOS METADADOS (SÓ NO CARD, NÃO NO HISTÓRICO) ---
+        race_info = {}
+        if 'card' in data and 'races' in data['card']:
+            for r in data['card']['races']:
+                if str(r.get('raceId')) == str(race_id):
                     race_info = r
                     break
+                    
+        # Se não achou no card, tenta no bloco 'race' isolado
+        if not race_info:
+            race_info = data.get('race', {})
 
-        pista = str(race_info.get("course") or race_info.get("courseName") or "Desconhecida").upper()
+        pista = str(race_info.get("courseName") or race_info.get("course") or "Desconhecida").upper()
         race_num = str(race_info.get("raceNumber") or race_info.get("raceNo") or "X")
         
-        # Pega a hora EXATA da prova de hoje (evita o bug do 14:14)
         raw_time = str(race_info.get("time") or race_info.get("raceTime") or "")
         hora_pista = "00:00"
         hora_br = "00:00"
@@ -101,12 +105,10 @@ def extrair_dados(url):
                 h, m = map(int, hora_pista.split(':'))
                 hora_br = f"{(h-3)%24:02d}:{m:02d}"
 
-        # Pega a classe da prova de hoje de forma automática
-        classe_hoje = str(race_info.get("raceClass") or race_info.get("class") or race_info.get("grade") or "").upper().strip()
-        if not classe_hoje:
-            # Se não achar direto, procura no título (ex: "A5 480m")
-            title = str(race_info.get("raceTitle", ""))
-            match_c = re.search(r'\b(A\d{1,2})\b', title)
+        # Pega a classe automática
+        classe_hoje = str(race_info.get("raceClass") or race_info.get("grade") or "A5").upper()
+        if not re.search(r'A\d+', classe_hoje):
+            match_c = re.search(r'\b(A\d{1,2})\b', str(race_info.get("raceTitle", "")))
             classe_hoje = match_c.group(1) if match_c else "A5"
             
         metadados = {
@@ -303,7 +305,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # CABEÇALHO AUTOMÁTICO
+                        # CABEÇALHO AUTOMÁTICO (SEM ENTRADA MANUAL)
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
