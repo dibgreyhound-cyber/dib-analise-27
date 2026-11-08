@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-import cloudscraper
+import requests
 from datetime import datetime
 
 st.set_page_config(page_title="DIB 2.7", layout="wide")
@@ -52,12 +52,37 @@ def extrair(url):
         rid = re.search(r"race_id=(\d+)", url).group(1)
         dt = re.search(r"r_date=([\d-]+)", url).group(1)
         d_obj = datetime.strptime(dt, "%Y-%m-%d")
+        
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
         
-        scraper = cloudscraper.create_scraper()
-        res = scraper.get(api_url, timeout=20)
-        if res.status_code != 200: return None, None, f"Erro no Racing Post (Status {res.status_code})."
-        data = res.json()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://greyhoundbet.racingpost.com/",
+            "Origin": "https://greyhoundbet.racingpost.com"
+        }
+        
+        data = None
+        try:
+            res = requests.get(api_url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+        except:
+            pass
+            
+        # Se falhar direto (bloqueio), tenta pelo proxy AllOrigins
+        if data is None:
+            proxy_url = f"https://api.allorigins.win/raw?url={requests.utils.quote(api_url)}"
+            try:
+                res = requests.get(proxy_url, timeout=20)
+                if res.status_code == 200:
+                    data = res.json()
+            except:
+                pass
+                
+        if data is None:
+            return None, None, "Racing Post bloqueou a conexão (Cloudflare). Tente novamente em alguns minutos."
             
         meta = {"pista": "Desconhecida", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5", "dist": "462"}
         race_info = {}
