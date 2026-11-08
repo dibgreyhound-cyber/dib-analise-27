@@ -94,8 +94,6 @@ def extrair_dados_racingpost(url):
             return None
 
         registros = []
-        debug_keys = set() # Para mostrar as chaves no painel de debug
-        
         for dog in dogs:
             nome = dog.get("dogName", "Desconhecido")
             trap = dog.get("trapNum", "0")
@@ -108,18 +106,12 @@ def extrair_dados_racingpost(url):
             dias_sem_correr = (r_date_obj - data_ultima).days
 
             for corrida in forms:
-                for k in corrida.keys(): debug_keys.add(k)
-                
-                # EXTRAÇÃO ROBUSTA DA GRADE
                 grade_corrida = "A6" # Padrão
-                
-                # 1. Tenta pelas chaves mais comuns
                 for key in ["grade", "gr", "raceGrade", "grde", "class", "cls", "raceClass"]:
                     if key in corrida and corrida[key]:
                         grade_corrida = str(corrida[key]).upper().strip()
                         break
                 else:
-                    # 2. Se não achar a chave, procura um valor que se pareça com "A4", "D3", etc.
                     for k, v in corrida.items():
                         if isinstance(v, str) and re.match(r'^[A-Z]\d{1,2}$', v.strip().upper()):
                             grade_corrida = v.strip().upper()
@@ -144,12 +136,11 @@ def extrair_dados_racingpost(url):
         df_final = pd.DataFrame(registros)
         if df_final.empty:
             st.warning("A tabela de dados ficou vazia após a extração.")
-            return None, list(debug_keys)
-            
-        return df_final, list(debug_keys)
+            return None
+        return df_final
     except Exception as e:
         st.error(f"Erro na extração: {e}")
-        return None, []
+        return None
 
 # =========================================================
 # INTERFACE E LÓGICA DIB 2.7
@@ -159,24 +150,16 @@ class_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A4"
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
-        df, api_keys = extrair_dados_racingpost(url_input)
+        df = extrair_dados_racingpost(url_input)
         
         if df is not None:
             try:
-                # Painel de Debug para vermos as chaves que a API retornou
-                with st.expander("🛠️ Debug da API (Clique para abrir)"):
-                    st.write("Chaves encontradas na API:", api_keys)
-                    st.dataframe(df.head(5))
-
-                # 1. Filtragem de Classes Oficiais
-                # Agora que a extração é robusta, vamos filtrar apenas corridas que começam com A ou D
                 df = df[df["Grade"].str.match(r'^[AD]\d{1,2}$', na=False)]
                 df = df[df["CalTm"] > 0] 
 
                 if df.empty:
                     st.warning("Nenhum galgo com corrida oficial válida nesta distância.")
                 else:
-                    # 2. Cálculos Base
                     df["Going_adj"] = df["Going"].apply(parse_going)
                     df["Traffic_adj"] = df["Remarks"].apply(parse_traffic)
                     df["CalTm_Ajust"] = df["CalTm"] - df["Going_adj"] - df["Traffic_adj"]
@@ -188,7 +171,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     
                     df["Fin_num"] = pd.to_numeric(df["Fin"].str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
-                    # 3. Agrupamento e Médias Ponderadas
                     def weighted_avg(group, col):
                         weights = np.array([5, 4, 3, 2, 1][:len(group)])
                         return np.average(group[col], weights=weights)
@@ -209,8 +191,12 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         else:
                             recup_med = 0.0
                         
-                        # Lógica de Categoria Rigorosa
+                        # ==========================================
+                        # CORREÇÃO DA LÓGICA DE CATEGORIA (DIB 2.7)
+                        # ==========================================
                         cat_ult_str = group.iloc[0]["Grade"]
+                        
+                        # Extrai o número da classe hoje e da última
                         match_hoje = re.search(r'A(\d+)', class_hoje)
                         match_ult = re.search(r'A(\d+)', cat_ult_str)
                         
@@ -219,11 +205,17 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         
                         cat_base = get_cat_base(class_hoje)
                         
-                        if nivel_ult < nivel_hoje:
-                            cat_final = cat_base + 2 # Desceu
-                        elif nivel_ult > nivel_hoje:
-                            cat_final = cat_base - 2 # Subiu
+                        # Se o nivel anterior for MAIOR que o de hoje, ele desceu (ex: 5 -> 4)
+                        if nivel_ult > nivel_hoje:
+                            cat_final = cat_base + 2
+                        # Se o nivel anterior for MENOR que o de hoje, ele subiu (ex: 4 -> 5)
+                        elif nivel_ult < nivel_hoje:
+                            cat_final = cat_base - 2
                         else:
+                            cat_final = cat_base
+                            
+                        # Se a última corrida não foi classe A (ex: D3), zera o bônus/penalidade
+                        if "A" not in cat_ult_str.upper():
                             cat_final = cat_base
 
                         confianca = len(group) * 20
@@ -296,7 +288,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                                 if f >= 50.0: avbs_principal.append({"V": v, "D": d, "Forca": f})
                                 elif f >= 40.0: avbs_sec.append({"V": v, "D": d, "Forca": f})
 
-                    # --- EXIBIÇÃO ---
                     st.markdown(f"### 🏁 {class_hoje}")
                     
                     st.markdown("**Classificação Geral**")
