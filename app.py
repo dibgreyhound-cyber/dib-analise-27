@@ -58,31 +58,22 @@ def extrair(url):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://greyhoundbet.racingpost.com/",
-            "Origin": "https://greyhoundbet.racingpost.com"
+            "Referer": "https://greyhoundbet.racingpost.com/"
         }
         
         data = None
         try:
             res = requests.get(api_url, headers=headers, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-        except:
-            pass
-            
-        # Se falhar direto (bloqueio), tenta pelo proxy AllOrigins
+            if res.status_code == 200: data = res.json()
+        except: pass
         if data is None:
             proxy_url = f"https://api.allorigins.win/raw?url={requests.utils.quote(api_url)}"
             try:
                 res = requests.get(proxy_url, timeout=20)
-                if res.status_code == 200:
-                    data = res.json()
-            except:
-                pass
+                if res.status_code == 200: data = res.json()
+            except: pass
                 
-        if data is None:
-            return None, None, "Racing Post bloqueou a conexão (Cloudflare). Tente novamente em alguns minutos."
+        if data is None: return None, None, "Racing Post bloqueou a conexão. Tente novamente em minutos."
             
         meta = {"pista": "Desconhecida", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5", "dist": "462"}
         race_info = {}
@@ -102,8 +93,11 @@ def extrair(url):
                 if match:
                     meta["hora"] = match.group(1)
                     meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
-            dist_raw = race_info.get("dist") or race_info.get("distance") or "462"
-            meta["dist"] = re.sub(r'[^\d]', '', str(dist_raw))
+            
+            # Pega a distância do card e converte para string de números
+            dist_raw = str(race_info.get("dist") or race_info.get("distance") or "462")
+            meta["dist"] = "".join(filter(str.isdigit, dist_raw))
+            
             cls = str(race_info.get("raceClass", meta["cat"])).upper()
             c_match = re.search(r'A\d+', cls)
             if c_match: meta["cat"] = c_match.group(0)
@@ -112,27 +106,40 @@ def extrair(url):
         if not dogs: return None, None, "Sem galgos no arquivo."
         
         regs, total = [], len(dogs)
+        dists_encontradas = set()
+
         for dog in dogs:
             n, t = dog.get("dogName", ""), int(dog.get("trapNum", 0))
             p_card_val = dog.get("weight", 0)
             try: p_card = float(p_card_val) if p_card_val else 0.0
             except: p_card = 0.0
+            
             forms = dog.get("forms", [])
             if not forms: continue
+            
             for c in forms:
-                dist_c_raw = c.get("dist") or c.get("distance") or "0"
-                dist_c = re.sub(r'[^\d]', '', str(dist_c_raw))
-                if dist_c != meta["dist"]: continue
+                # Tenta as duas chaves e extrai apenas os números
+                d_raw = str(c.get("dist") or c.get("distance") or "")
+                d_clean = "".join(filter(str.isdigit, d_raw))
+                dists_encontradas.add(d_clean)
+                
+                # Se a distância bater, segue com o processamento
+                if d_clean != meta["dist"]:
+                    continue
+                    
                 g = c.get("gr") or c.get("grade") or "A5"
                 if not re.match(r'^A\d+', str(g)):
                     for v in c.values():
                         if isinstance(v, str) and re.match(r'^([A-Z]\d{1,2})$', v.strip().upper()):
                             g = v.strip().upper(); break
-                split_val = c.get("sectionalTime", 0); caltm_val = c.get("calcRTimes", 0)
+                            
+                split_val = c.get("sectionalTime", 0)
+                caltm_val = c.get("calcRTimes", 0)
                 try: split_f = float(split_val) if split_val else 0.0
                 except: split_f = 0.0
                 try: caltm_f = float(caltm_val) if caltm_val else 0.0
                 except: caltm_f = 0.0
+
                 regs.append({
                     "Galgo": n, "Trap_Num": t, "Trap": get_emoji(t), "Split": split_f, "CalTm": caltm_f, 
                     "Going": c.get("goingType", "N"), "Bends": c.get("bndPos", "4444"), 
@@ -141,9 +148,15 @@ def extrair(url):
                     "Dias": (d_obj - datetime.strptime(c.get("raceTime", dt)[:10], "%Y-%m-%d")).days, 
                     "Grade": str(g), "Data_Corrida": c.get("raceTime", "")[:10], "Total_Caes": total
                 })
-        if not regs: return None, None, f"Nenhum galgo possui histórico na distância de {meta['dist']}m."
+                
+        if not regs: 
+            # DIAGNÓSTICO: Se não achou nada, mostra as distâncias que vieram no JSON
+            dists_str = ", ".join(sorted(list(dists_encontradas)))
+            return None, None, f"Nenhum galgo possui histórico na distância de {meta['dist']}m. (Distâncias encontradas no JSON: {dists_str})"
+            
         return pd.DataFrame(regs), meta, None
-    except Exception as e: return None, None, f"Erro: {str(e)}"
+    except Exception as e: 
+        return None, None, f"Erro: {str(e)}"
 
 def render_avb(v, d, f):
     def fmt(x, y, i=False):
@@ -159,12 +172,13 @@ url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingp
 if st.button("Analisar", type="primary") and url:
     with st.spinner("Buscando dados no Racing Post..."):
         df_b, meta, err = extrair(url)
-        if err: st.error(err)
+        if err: 
+            st.error(err)
         elif df_b is not None and not df_b.empty:
             try:
                 cat_h, d_h = meta["cat"], meta["dist"]
                 df = df_b[df_b["CalTm"] > 0].copy()
-                if df.empty: st.warning("Sem corridas válidas.")
+                if df.empty: st.warning("Sem corridas válidas (tempos nulos).")
                 else:
                     df["Time_Ajust"] = df["CalTm"] - df["Going"].apply(parse_going) - df["Remarks"].apply(parse_traffic)
                     df["Has_Traffic"] = df["Remarks"].apply(is_traffic)
@@ -202,7 +216,7 @@ if st.button("Analisar", type="primary") and url:
                             "Time_Ajust": val["Time_Ajust"].mean(), "M_Split": m_s, "M_Time": m_t, "Ritmo": m_t - m_s, 
                             "Recup": rec_med, "Recup_Str": rec_str, "Confianca": cnf, "Block": blk
                         })
-                    if not res: st.error("Sem corridas oficiais.")
+                    if not res: st.error("Sem corridas oficiais (A) na distância exata.")
                     else:
                         agg = pd.DataFrame(res)
                         agg["Overall"] = (calc_prop(agg["Time_Ajust"], 40, 5) + calc_prop(agg["M_Time"], 30, 5) + calc_prop(agg["M_Split"], 15, 2) + calc_prop(agg["Ritmo"], 15, 2) + agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"])
