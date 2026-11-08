@@ -49,7 +49,6 @@ def calc_prop_points(series, is_reverse=False):
 
 def get_cat_base(grade_str):
     mapping = {"A1": 15, "A2": 14, "A3": 13, "A4": 12, "A5": 11, "A6": 10, "A7": 9, "A8": 8, "A9": 7, "A10": 6, "A11": 5}
-    # Extrai apenas a parte "A" + número (ex: A4 de "A4 - 480m")
     match = re.search(r'A(\d+)', str(grade_str).upper())
     if match:
         key = f"A{match.group(1)}"
@@ -95,6 +94,8 @@ def extrair_dados_racingpost(url):
             return None
 
         registros = []
+        debug_keys = set() # Para mostrar as chaves no painel de debug
+        
         for dog in dogs:
             nome = dog.get("dogName", "Desconhecido")
             trap = dog.get("trapNum", "0")
@@ -107,9 +108,23 @@ def extrair_dados_racingpost(url):
             dias_sem_correr = (r_date_obj - data_ultima).days
 
             for corrida in forms:
-                # Tenta pegar a grade de várias formas possíveis para não dar erro
-                grade_corrida = corrida.get("grade") or corrida.get("gr") or corrida.get("raceGrade") or "A6"
+                for k in corrida.keys(): debug_keys.add(k)
                 
+                # EXTRAÇÃO ROBUSTA DA GRADE
+                grade_corrida = "A6" # Padrão
+                
+                # 1. Tenta pelas chaves mais comuns
+                for key in ["grade", "gr", "raceGrade", "grde", "class", "cls", "raceClass"]:
+                    if key in corrida and corrida[key]:
+                        grade_corrida = str(corrida[key]).upper().strip()
+                        break
+                else:
+                    # 2. Se não achar a chave, procura um valor que se pareça com "A4", "D3", etc.
+                    for k, v in corrida.items():
+                        if isinstance(v, str) and re.match(r'^[A-Z]\d{1,2}$', v.strip().upper()):
+                            grade_corrida = v.strip().upper()
+                            break
+
                 reg = {
                     "Galgo": nome, 
                     "Trap_Num": int(trap) if str(trap).isdigit() else 0,
@@ -121,7 +136,7 @@ def extrair_dados_racingpost(url):
                     "Remarks": corrida.get("closeUpCmnt", ""),
                     "Peso_Atual": peso, 
                     "Dias_Sem_Correr": dias_sem_correr,
-                    "Grade": str(grade_corrida).upper().strip(),
+                    "Grade": grade_corrida,
                     "Data_Corrida": corrida.get("raceTime", "")[:10]
                 }
                 registros.append(reg)
@@ -129,12 +144,12 @@ def extrair_dados_racingpost(url):
         df_final = pd.DataFrame(registros)
         if df_final.empty:
             st.warning("A tabela de dados ficou vazia após a extração.")
-            return None
+            return None, list(debug_keys)
             
-        return df_final
+        return df_final, list(debug_keys)
     except Exception as e:
         st.error(f"Erro na extração: {e}")
-        return None
+        return None, []
 
 # =========================================================
 # INTERFACE E LÓGICA DIB 2.7
@@ -144,12 +159,18 @@ class_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A4"
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
-        df = extrair_dados_racingpost(url_input)
+        df, api_keys = extrair_dados_racingpost(url_input)
         
         if df is not None:
             try:
-                # 1. Filtragem de Classes Oficiais e Tratamento
-                df = df[~df["Grade"].str.contains("T|HP", na=False)]
+                # Painel de Debug para vermos as chaves que a API retornou
+                with st.expander("🛠️ Debug da API (Clique para abrir)"):
+                    st.write("Chaves encontradas na API:", api_keys)
+                    st.dataframe(df.head(5))
+
+                # 1. Filtragem de Classes Oficiais
+                # Agora que a extração é robusta, vamos filtrar apenas corridas que começam com A ou D
+                df = df[df["Grade"].str.match(r'^[AD]\d{1,2}$', na=False)]
                 df = df[df["CalTm"] > 0] 
 
                 if df.empty:
@@ -220,7 +241,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             "Confiança": confianca,
                             "Block_Winner": is_trial or confianca < 60,
                             "Perfil": "⚠️ Irregular" if group["Has_Traffic"].sum() > 1 else "✅ Limpo",
-                            "Grade": "·".join(group["Grade"].head(5)), # Nome alterado aqui
+                            "Grade": "·".join(group["Grade"].head(5)),
                             "Peso": group.iloc[0]["Peso_Atual"],
                             "Dias": group.iloc[0]["Dias_Sem_Correr"],
                             "Split": group.iloc[0]["Split"],
@@ -276,7 +297,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                                 elif f >= 40.0: avbs_sec.append({"V": v, "D": d, "Forca": f})
 
                     # --- EXIBIÇÃO ---
-                    st.markdown(f"### 🏁 {class_hoje} · 480m")
+                    st.markdown(f"### 🏁 {class_hoje}")
                     
                     st.markdown("**Classificação Geral**")
                     medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
@@ -284,7 +305,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     st.info(ranking)
 
                     st.markdown("### 📊 Planilha de Projeção")
-                    # Colunas ajustadas: Adicionado Time e renomeado Histórico para Grade
                     cols = ["Trap", "Galgo", "Overall", "Categoria", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
                     st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
 
