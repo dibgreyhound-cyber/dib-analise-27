@@ -55,8 +55,22 @@ def get_trap_emoji(trap_num):
     trap_map = {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}
     return trap_map.get(int(trap_num), str(trap_num))
 
+# --- FUNÇÃO PARA VARRER O JSON E ACHAR OS DADOS ---
+def buscar_chave(dicionario, chaves_alvo):
+    if isinstance(dicionario, dict):
+        for k, v in dicionario.items():
+            if k in chaves_alvo and v:
+                return v
+            resultado = buscar_chave(v, chaves_alvo)
+            if resultado: return resultado
+    elif isinstance(dicionario, list):
+        for item in dicionario:
+            resultado = buscar_chave(item, chaves_alvo)
+            if resultado: return resultado
+    return None
+
 # =========================================================
-# EXTRAIR DADOS (AGORA COM O BLOCO 'RACE' CORRETO)
+# EXTRAIR DADOS (BUSCA BLINDADA)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -64,8 +78,8 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        # AQUI ESTÁ A CORREÇÃO: blocks=race,form para pegar os dados da prova de hoje
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=race,form"
+        # Pede meeting, race e form para garantir que todos os dados venham
+        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=meeting,race,form"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -80,25 +94,22 @@ def extrair_dados(url):
 
         data = response.json()
         
-        # Pega os dados da corrida de hoje diretamente do bloco "race"
-        race_info = data.get("race", {})
-        pista = race_info.get("course", "Desconhecida").upper()
-        race_num = race_info.get("raceNumber", "X")
-        raw_time = race_info.get("raceTime", "") # Ex: "2026-11-08T08:41:00Z"
-
-        # Converte o horário para BR (-3h)
+        # --- BUSCA INTELIGENTE DE METADADOS ---
+        pista = str(buscar_chave(data, ["course", "trackName", "track"]) or "Desconhecida").upper()
+        race_num = str(buscar_chave(data, ["raceNumber", "raceNo"]) or "X")
+        
+        # O horário pode estar em "time", "raceTime" ou "offTime"
+        raw_time = str(buscar_chave(data, ["time", "raceTime", "offTime"]) or "")
+        
         hora_pista_str = "00:00"
         hora_br_str = "00:00"
         if raw_time:
-            try:
-                match_time = re.search(r'(\d{2}:\d{2})', raw_time)
-                if match_time:
-                    hora_pista_str = match_time.group(1)
-                    h, m = map(int, hora_pista_str.split(':'))
-                    h_br = (h - 3) % 24
-                    hora_br_str = f"{h_br:02d}:{m:02d}"
-            except:
-                pass
+            match_time = re.search(r'(\d{2}:\d{2})', raw_time)
+            if match_time:
+                hora_pista_str = match_time.group(1)
+                h, m = map(int, hora_pista_str.split(':'))
+                h_br = (h - 3) % 24
+                hora_br_str = f"{h_br:02d}:{m:02d}"
 
         metadados = {
             "pista": pista,
@@ -128,7 +139,6 @@ def extrair_dados(url):
             dist_hoje_str = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
 
             for corrida in forms:
-                # Pega a grade exata
                 grade = corrida.get("gr") or corrida.get("grade")
                 if not grade:
                     for v in corrida.values():
@@ -137,7 +147,7 @@ def extrair_dados(url):
                             if m:
                                 grade = m.group(1)
                                 break
-                if not grade: grade = "A5" # Fallback
+                if not grade: grade = "A5" 
                             
                 dist_corrida_str = re.sub(r'[^\d]', '', str(corrida.get("distance", "480")))
                 peso_corrida = float(corrida.get("weight", 0) or 0)
@@ -294,7 +304,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # --- CABEÇALHO FORMATADO CORRETO ---
+                        # --- CABEÇALHO FORMATADO (COM DADOS BLINDADOS) ---
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
