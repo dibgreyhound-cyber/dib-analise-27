@@ -5,23 +5,65 @@ import re
 import requests
 from datetime import datetime
 
-st.set_page_config(page_title="DIB 2.7 - Analisador de Elite", layout="wide")
-st.title("🐾 DIB 2.7 - Analisador de Elite")
+st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
+st.title("🐾 Análise DIB 2.7")
 
 # =========================================================
-# CONSTANTES
+# 🔧 FUNÇÕES AUXILIARES
 # =========================================================
-TRAP_EMOJIS = {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}
-CAT_BASE = {"A1": 15, "A2": 14, "A3": 13, "A4": 12, "A5": 11, "A6": 10, "A7": 9, "A8": 8, "A9": 7, "A10": 6, "A11": 5}
+def parse_going(g):
+    if pd.isna(g) or g is None: return 0.0
+    g = str(g).strip().upper().replace(" ", "")
+    if g in ["N", "NORMAL"]: return 0.0
+    m = re.match(r"([+-]?)(\d+)", g)
+    if not m: return 0.0
+    val = int(m.group(2)) / 100.0
+    return -val if m.group(1) == "-" else val
 
-def parse_trap(trap_num):
-    try:
-        return TRAP_EMOJIS.get(int(trap_num), "vacant")
-    except:
-        return "vacant"
+def parse_traffic(remarks):
+    if pd.isna(remarks): return 0.0
+    r = str(remarks).upper()
+    if "BAULKED" in r or "BLK" in r: return 0.20
+    if "CRD" in r or "BMP" in r or "FCD" in r: return 0.10
+    return 0.0
+
+def is_traffic(remarks):
+    if pd.isna(remarks): return False
+    r = str(remarks).upper()
+    return any(x in r for x in ["CRD", "BMP", "BLK", "BAULKED", "FCD", "MVDOFF", "EVCH"])
+
+def get_bends(b_str):
+    if pd.isna(b_str): return 4, 4
+    digits = [int(c) for c in str(b_str) if c.isdigit()]
+    if len(digits) >= 4: return digits[0], digits[-1]
+    return 4, 4
+
+def calc_prop_points(series, is_reverse=False):
+    s = pd.to_numeric(series, errors="coerce").fillna(series.median())
+    if s.max() == s.min(): return pd.Series([40] * len(s), index=s.index)
+    min_val, max_val = s.min(), s.max()
+    if not is_reverse: 
+        return 40 - ((s - min_val) / (max_val - min_val) * 35)
+    else: 
+        return 5 + ((s - min_val) / (max_val - min_val) * 35)
+
+def get_cat_base(grade_str):
+    mapping = {"A1": 15, "A2": 14, "A3": 13, "A4": 12, "A5": 11, "A6": 10, "A7": 9, "A8": 8, "A9": 7, "A10": 6, "A11": 5}
+    # Extrai apenas a parte "A" + número (ex: A4 de "A4 - 480m")
+    match = re.search(r'A(\d+)', str(grade_str).upper())
+    if match:
+        key = f"A{match.group(1)}"
+        return mapping.get(key, 10)
+    return 10
+
+def check_alvo(split_med, top3_splits, recup_med):
+    if pd.isna(split_med) or len(top3_splits) < 3: return False
+    is_split_bad = split_med > top3_splits[-1]
+    is_recup_bad = recup_med <= 0
+    return is_split_bad and is_recup_bad
 
 # =========================================================
-# EXTRAÇÃO DE DADOS (CORRIGIDA)
+# EXTRAIR DADOS DO RACING POST
 # =========================================================
 def extrair_dados_racingpost(url):
     try:
@@ -29,7 +71,8 @@ def extrair_dados_racingpost(url):
         r_date_match = re.search(r"r_date=([\d-]+)", url)
 
         if not race_id_match or not r_date_match:
-            return None, None, None, "Link inválido."
+            st.error("Link inválido. Precisa ter 'race_id' e 'r_date'.")
+            return None
 
         race_id = race_id_match.group(1)
         r_date_str = r_date_match.group(1)
@@ -39,242 +82,230 @@ def extrair_dados_racingpost(url):
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://greyhoundbet.racingpost.com/"
+            "Accept": "application/json, text/plain, */*"
         }
         
-        response = requests.get(api_url, headers=headers, timeout=20)
+        response = requests.get(api_url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            return None, None, None, "Nenhum galgo encontrado no link."
+            st.warning("Nenhum dado de galgo encontrado no link.")
+            return None
 
         registros = []
-        
-        # A distância de hoje é a distância da corrida mais recente (forms[0])
-        # Pega a distância de um dos galgos para servir de base para todos
-        dist_hoje = "480m"
-        for dog in dogs:
-            if dog.get("forms"):
-                dist_hoje = dog["forms"][0].get("distance", "480m")
-                break
-
-        total_caes = len(dogs)
-
         for dog in dogs:
             nome = dog.get("dogName", "Desconhecido")
             trap = dog.get("trapNum", "0")
-            peso_atual_str = str(dog.get("weight", "0"))
+            peso = float(dog.get("weight", 0) or 0)
             
-            try:
-                peso_atual = float(re.sub(r'[^\d.]', '', peso_atual_str))
-            except:
-                peso_atual = 0.0
-
             forms = dog.get("forms", [])
-            
-            for corrida in forms:
-                # FILTRO DE DISTÂNCIA E CORRIDAS VÁLIDAS
-                dist_corrida = corrida.get("distance", "")
-                if dist_corrida and dist_hoje and dist_corrida != dist_hoje:
-                    continue # Pula se a distância for diferente
-                
-                grade = str(corrida.get("grade", "A5"))
-                if grade.startswith('T') or grade.startswith('HP'):
-                    # Se for Trial, salva apenas para dias sem correr, mas não para tempos
-                    pass 
+            if not forms: continue
 
+            data_ultima = datetime.strptime(forms[0].get("raceTime", r_date_str)[:10], "%Y-%m-%d")
+            dias_sem_correr = (r_date_obj - data_ultima).days
+
+            for corrida in forms:
+                # Tenta pegar a grade de várias formas possíveis para não dar erro
+                grade_corrida = corrida.get("grade") or corrida.get("gr") or corrida.get("raceGrade") or "A6"
+                
                 reg = {
-                    "Galgo": nome,
+                    "Galgo": nome, 
                     "Trap_Num": int(trap) if str(trap).isdigit() else 0,
-                    "Trap": parse_trap(trap),
-                    "Dist": dist_hoje,
-                    "Split": float(corrida.get("sectionalTime", 0) or 0),
+                    "Split": float(corrida.get("sectionalTime", 0) or 0), 
                     "CalTm": float(corrida.get("calcRTimes", 0) or 0),
-                    "Going": str(corrida.get("goingType", "N") or "N"),
-                    "Bends": str(corrida.get("bndPos", "4444") or "4444"),
-                    "Fin": str(corrida.get("outcomeDesc", "6") or "6"),
-                    "Remarks": str(corrida.get("closeUpCmnt", "") or ""),
-                    "Grade": grade,
-                    "Peso": float(corrida.get("weight", 0) or 0) if str(corrida.get("weight", "0")).replace('.','',1).isdigit() else 0.0,
-                    "Data_Corrida": datetime.strptime(corrida.get("raceTime", r_date_str)[:10], "%Y-%m-%d")
+                    "Going": corrida.get("goingType", "N"),
+                    "Bends": corrida.get("bndPos", "4444"),
+                    "Fin": str(corrida.get("outcomeDesc", "6")),
+                    "Remarks": corrida.get("closeUpCmnt", ""),
+                    "Peso_Atual": peso, 
+                    "Dias_Sem_Correr": dias_sem_correr,
+                    "Grade": str(grade_corrida).upper().strip(),
+                    "Data_Corrida": corrida.get("raceTime", "")[:10]
                 }
                 registros.append(reg)
         
-        df = pd.DataFrame(registros)
-        df['Peso_Atual_Card'] = peso_atual
-        df['Total_Caes'] = total_caes
-        
-        return df, None
+        df_final = pd.DataFrame(registros)
+        if df_final.empty:
+            st.warning("A tabela de dados ficou vazia após a extração.")
+            return None
+            
+        return df_final
     except Exception as e:
-        return None, f"Erro na extração: {e}"
+        st.error(f"Erro na extração: {e}")
+        return None
 
 # =========================================================
-# ENGINE DIB 2.7
+# INTERFACE E LÓGICA DIB 2.7
 # =========================================================
-def calcular_dib(df, data_hoje):
-    resultados = []
-    
-    for galgo, group in df.groupby("Galgo"):
-        group = group.sort_values("Data_Corrida", ascending=False)
-        ultima_geral = group.iloc[0]
+url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
+class_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A4").upper()
+
+if st.button("Analisar Corrida", type="primary") and url_input:
+    with st.spinner("Processando DIB 2.7..."):
+        df = extrair_dados_racingpost(url_input)
         
-        # 1. Dias sem correr
-        dias_sem_correr = (data_hoje - ultima_geral['Data_Corrida']).days
-        
-        # 2. Validação de Tempo (Ignora T e HP)
-        validas = group[~group['Grade'].str.startswith(('T', 'HP'))].copy()
-        if validas.empty:
-            continue
-            
-        ultima_valida = validas.iloc[0]
-        
-        # 3. Peso (Variação)
-        peso_atual = group['Peso_Atual_Card'].iloc[0]
-        peso_ultimo = ultima_valida['Peso']
-        dif_peso = abs(peso_atual - peso_ultimo) if peso_atual > 0 and peso_ultimo > 0 else 0.0
-        
-        # 4. Categoria (Base)
-        cat_base = CAT_BASE.get(ultima_valida['Grade'][:2], 10)
-        
-        tempos_ajustados = []
-        recuperacoes = []
-        
-        for _, row in validas.iterrows():
-            t = row['CalTm']
-            if t == 0: continue
+        if df is not None:
+            try:
+                # 1. Filtragem de Classes Oficiais e Tratamento
+                df = df[~df["Grade"].str.contains("T|HP", na=False)]
+                df = df[df["CalTm"] > 0] 
 
-            # Time Ajustado (Going)
-            going_val = str(row['Going']).replace('N', '0').strip()
-            if going_val.startswith('+'):
-                try: t -= float(going_val.replace('+', '')) / 100
-                except: pass
-            elif going_val.startswith('-'):
-                try: t += float(going_val.replace('-', '')) / 100
-                except: pass
-            
-            # Time Ajustado (Tráfego Severo)
-            remarks = row['Remarks'].lower()
-            if 'baulked' in remarks: t -= 0.20
-            if any(x in remarks for x in ['crd', 'bmp', 'fcd']): t -= 0.10
-            
-            tempos_ajustados.append(t)
-            
-            # Recuperação Blindada
-            if not any(x in remarks for x in ['crd', 'bmp', 'blk', 'baulked', 'fcd-ck', 'evch', 'mvdoff']):
-                try:
-                    p_inicio = int(row['Bends'][0]) if row['Bends'] and row['Bends'][0].isdigit() else 4
-                    p_fim = int(row['Fin']) if row['Fin'].isdigit() else 4
-                    ganho = p_inicio - p_fim
-                    recup = (ganho / group['Total_Caes'].iloc[0]) * 100
-                    recuperacoes.append(recup)
-                except:
-                    pass
+                if df.empty:
+                    st.warning("Nenhum galgo com corrida oficial válida nesta distância.")
+                else:
+                    # 2. Cálculos Base
+                    df["Going_adj"] = df["Going"].apply(parse_going)
+                    df["Traffic_adj"] = df["Remarks"].apply(parse_traffic)
+                    df["CalTm_Ajust"] = df["CalTm"] - df["Going_adj"] - df["Traffic_adj"]
+                    df["Has_Traffic"] = df["Remarks"].apply(is_traffic)
+                    
+                    bends_split = df["Bends"].apply(lambda x: pd.Series(get_bends(x)))
+                    df["Bend_1"] = bends_split[0]
+                    df["Bend_Fin"] = bends_split[1]
+                    
+                    df["Fin_num"] = pd.to_numeric(df["Fin"].str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
-        if not tempos_ajustados:
-            continue
+                    # 3. Agrupamento e Médias Ponderadas
+                    def weighted_avg(group, col):
+                        weights = np.array([5, 4, 3, 2, 1][:len(group)])
+                        return np.average(group[col], weights=weights)
 
-        # 5. Médias Ponderadas (Time Decay 5,4,3,2,1)
-        pesos_decay = [5, 4, 3, 2, 1][:len(tempos_ajustados)]
-        media_time = np.average(tempos_ajustados, weights=pesos_decay)
-        
-        splits_validos = [s for s in validas['Split'].tolist() if s > 0]
-        pesos_split = [5, 4, 3, 2, 1][:len(splits_validos)]
-        media_split = np.average(splits_validos, weights=pesos_split) if splits_validos else 0
-        
-        # 6. Ritmo Final e Recuperação
-        ritmo_final = media_time - media_split
-        recup_media = np.mean(recuperacoes) if recuperacoes else 0.0
-        
-        # 7. Confiança
-        confianca = min(len(validas) * 20, 100)
-        bloqueado = " [BLOQUEADO]" if confianca < 60 else ""
-        
-        # 8. Perfil e Posição Média
-        try:
-            pos_media = np.mean([int(b[0]) for b in validas['Bends'].tolist() if b and b[0].isdigit()])
-        except:
-            pos_media = 4.0
-            
-        perfil = "Frente" if pos_media <= 2.5 else "Atrás"
-
-        resultados.append({
-            "Galgo_Original": galgo,
-            "Galgo": galgo + bloqueado,
-            "Trap": ultima_geral['Trap'],
-            "Trap_Num": ultima_geral['Trap_Num'],
-            "Categoria": cat_base,
-            "Perfil": perfil,
-            "Posicao_Med": round(pos_media, 1),
-            "Peso_Dif": round(dif_peso, 1),
-            "Dias": dias_sem_correr,
-            "Split": ultima_valida['Split'],
-            "Time": ultima_valida['CalTm'],
-            "Time_Ajustado": round(np.mean(tempos_ajustados), 2),
-            "Media_Split": round(media_split, 2),
-            "Media_Time": round(media_time, 2),
-            "Ritmo_Final": round(ritmo_final, 2),
-            "Recup_Media": round(recup_media, 2),
-            "Confianca": confianca,
-            "Historico": f"{len(validas)}/{len(group)}",
-            "Overall": 0, "Forca": 0
-        })
-
-    if not resultados: return None
-    df_agg = pd.DataFrame(resultados)
-
-    # Cálculo do Overall (Base de Velocidade)
-    def min_max(series, invert=False):
-        if series.max() == series.min(): return pd.Series([50]*len(series), index=series.index)
-        if invert: return ((series.max() - series) / (series.max() - series.min())) * 100
-        return ((series - series.min()) / (series.max() - series.min())) * 100
-
-    base_vel = (min_max(df_agg['Time_Ajustado'], True) * 0.40) + \
-               (min_max(df_agg['Media_Time'], True) * 0.30) + \
-               (min_max(df_agg['Media_Split'], True) * 0.15) + \
-               (min_max(df_agg['Ritmo_Final'], True) * 0.15)
-               
-    df_agg['Overall'] = (base_vel + df_agg['Categoria'] + (df_agg['Recup_Media'] / 10)).round(2)
-
-    # Travas de Alvo
-    top3_split = df_agg['Media_Split'].nsmallest(3).values
-    df_agg['Alvo'] = df_agg.apply(lambda r: "🎯" if (r['Media_Split'] not in top3_split and r['Recup_Media'] <= 0) else "", axis=1)
-    df_agg['Galgo'] = df_agg['Alvo'] + " " + df_agg['Galgo']
-
-    return df_agg.sort_values("Trap_Num").reset_index(drop=True)
-
-# =========================================================
-# INTERFACE
-# =========================================================
-url_input = st.text_input("🔗 Cole o link do Racing Post:")
-
-if st.button("Analisar Corrida", type="primary"):
-    if url_input:
-        with st.spinner("Conectando ao Racing Post e aplicando DIB 2.7..."):
-            df_raw, erro = extrair_dados_racingpost(url_input)
-            
-            if erro:
-                st.error(erro)
-            elif df_raw is None or df_raw.empty:
-                st.warning("Nenhum dado válido encontrado.")
-            else:
-                df_proj = calcular_dib(df_raw, df_raw['Data_Corrida'].max())
-                
-                st.subheader("📋 Planilha de Projeção")
-                
-                cols = ["Trap", "Galgo", "Overall", "Categoria", "Fatores", "Perfil", 
-                        "Histórico", "Posicao_Med", "Peso_Dif", "Dias", "Split", "Time", 
-                        "Time_Ajustado", "Media_Split", "Media_Time", "Ritmo_Final", 
-                        "Recup_Media", "Confianca"]
+                    res = []
+                    for nome, group in df.groupby("Galgo"):
+                        group = group.sort_values("Data_Corrida", ascending=False)
                         
-                df_proj['Fatores'] = "Velocidade" # Placeholder para a coluna
-                
-                st.dataframe(df_proj[cols], use_container_width=True, hide_index=True)
+                        m_time = weighted_avg(group, "CalTm")
+                        m_split = weighted_avg(group, "Split")
+                        m_ajust = group["CalTm_Ajust"].mean()
+                        ritmo = m_time - m_split
+                        
+                        clean_runs = group[~group["Has_Traffic"]]
+                        if not clean_runs.empty:
+                            recup_vals = ((clean_runs["Bend_1"] - clean_runs["Fin_num"]) / 6) * 100
+                            recup_med = recup_vals.mean()
+                        else:
+                            recup_med = 0.0
+                        
+                        # Lógica de Categoria Rigorosa
+                        cat_ult_str = group.iloc[0]["Grade"]
+                        match_hoje = re.search(r'A(\d+)', class_hoje)
+                        match_ult = re.search(r'A(\d+)', cat_ult_str)
+                        
+                        nivel_hoje = int(match_hoje.group(1)) if match_hoje else 6
+                        nivel_ult = int(match_ult.group(1)) if match_ult else 6
+                        
+                        cat_base = get_cat_base(class_hoje)
+                        
+                        if nivel_ult < nivel_hoje:
+                            cat_final = cat_base + 2 # Desceu
+                        elif nivel_ult > nivel_hoje:
+                            cat_final = cat_base - 2 # Subiu
+                        else:
+                            cat_final = cat_base
 
-                # Classificação Geral
-                df_rank = df_proj.sort_values("Overall", ascending=False).head(3)
-                podium = " > ".join([f"{med} {row['Trap']}" for med, (_, row) in zip(["🥇", "🥈", "🥉"], df_rank.iterrows())])
-                st.markdown(f"### 🏆 Classificação Geral: {podium}")
+                        confianca = len(group) * 20
+                        is_trial = str(group.iloc[0]["Grade"]).startswith("T")
+                        
+                        res.append({
+                            "Trap": group.iloc[0]["Trap_Num"],
+                            "Galgo": nome,
+                            "Categoria": cat_final,
+                            "Media Time": m_time,
+                            "Media Split": m_split,
+                            "Time Ajustado": m_ajust,
+                            "Ritmo final": ritmo,
+                            "Recup. Média": recup_med,
+                            "Confiança": confianca,
+                            "Block_Winner": is_trial or confianca < 60,
+                            "Perfil": "⚠️ Irregular" if group["Has_Traffic"].sum() > 1 else "✅ Limpo",
+                            "Grade": "·".join(group["Grade"].head(5)), # Nome alterado aqui
+                            "Peso": group.iloc[0]["Peso_Atual"],
+                            "Dias": group.iloc[0]["Dias_Sem_Correr"],
+                            "Split": group.iloc[0]["Split"],
+                            "Time": group.iloc[0]["CalTm"]
+                        })
+
+                    agg = pd.DataFrame(res)
+                    
+                    top3_splits = agg["Media Split"].nsmallest(3).tolist()
+                    agg["Is_Target"] = agg.apply(lambda x: check_alvo(x["Media Split"], top3_splits, x["Recup. Média"]), axis=1)
+
+                    pts_ajust = calc_prop_points(agg["Time Ajustado"])
+                    pts_mtime = calc_prop_points(agg["Media Time"])
+                    pts_msplit = calc_prop_points(agg["Media Split"])
+                    pts_ritmo = calc_prop_points(agg["Ritmo final"], is_reverse=True)
+                    
+                    agg["Base_Velocidade"] = pts_ajust + pts_mtime + pts_msplit + pts_ritmo
+                    
+                    perfil_pts = agg["Perfil"].apply(lambda x: 10 if "Limpo" in x else 5)
+                    recup_pts = (5 + (agg["Recup. Média"] / 10)).clip(0, 10)
+                    
+                    agg["Overall"] = agg["Base_Velocidade"] + agg["Categoria"] + perfil_pts + recup_pts
+                    agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
+                    
+                    elegiveis = agg[~agg["Block_Winner"]].reset_index(drop=True)
+                    
+                    def calc_forca(v, d):
+                        diff_over = v["Overall"] - d["Overall"]
+                        diff_tempo = 100 * (d["Media Time"] - v["Media Time"])
+                        diff_recup = (v["Recup. Média"] - d["Recup. Média"]) / 2
+                        diff_cat = (v["Categoria"] - d["Categoria"]) * 2
+                        return diff_over + diff_tempo + diff_recup + diff_cat
+
+                    avbs_alvo = []
+                    targets = agg[agg["Is_Target"]].sort_values("Overall")
+                    for _, tgt in targets.iterrows():
+                        attackers = elegiveis[elegiveis["Overall"] > tgt["Overall"]]
+                        for _, atk in attackers.iterrows():
+                            f = calc_forca(atk, tgt)
+                            if f >= 50.0:
+                                is_star = atk["Galgo"] in elegiveis["Galgo"].head(4).values
+                                avbs_alvo.append({"V": atk, "D": tgt, "Forca": f, "Star": is_star})
+
+                    avbs_principal, avbs_sec = [], []
+                    for i in range(min(3, len(elegiveis))):
+                        v = elegiveis.iloc[i]
+                        for j in [i+2, i+3]:
+                            if j < len(elegiveis):
+                                d = elegiveis.iloc[j]
+                                if d["Is_Target"]: continue
+                                f = calc_forca(v, d)
+                                if f >= 50.0: avbs_principal.append({"V": v, "D": d, "Forca": f})
+                                elif f >= 40.0: avbs_sec.append({"V": v, "D": d, "Forca": f})
+
+                    # --- EXIBIÇÃO ---
+                    st.markdown(f"### 🏁 {class_hoje} · 480m")
+                    
+                    st.markdown("**Classificação Geral**")
+                    medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
+                    ranking = " > ".join([f"{medals[i]} [{row['Trap']}] {row['Galgo']}" for i, row in agg.iterrows()])
+                    st.info(ranking)
+
+                    st.markdown("### 📊 Planilha de Projeção")
+                    # Colunas ajustadas: Adicionado Time e renomeado Histórico para Grade
+                    cols = ["Trap", "Galgo", "Overall", "Categoria", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
+                    st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
+
+                    st.markdown("### 🎯 Planilha de AVB do Alvo")
+                    if avbs_alvo:
+                        for a in avbs_alvo:
+                            star = "⭐ " if a["Star"] else ""
+                            st.success(f"{star}**{a['V']['Trap']} {a['V']['Galgo']}** vence 🎯 **{a['D']['Trap']} {a['D']['Galgo']}** (Força: {a['Forca']:.2f})")
+                    else: st.info("Nenhum AVB de Alvo.")
+
+                    st.markdown("### 🎯 Planilha de AVB Principal")
+                    if avbs_principal:
+                        for a in avbs_principal:
+                            st.success(f"**{a['V']['Trap']} {a['V']['Galgo']}** vence **{a['D']['Trap']} {a['D']['Galgo']}** (Força: {a['Forca']:.2f})")
+                    else: st.info("Nenhum AVB Principal.")
+
+                    st.markdown("### 🎯 Planilha de AVB Secundário")
+                    if avbs_sec:
+                        for a in avbs_sec:
+                            st.warning(f"**{a['V']['Trap']} {a['V']['Galgo']}** vence **{a['D']['Trap']} {a['D']['Galgo']}** (Força: {a['Forca']:.2f})")
+                    else: st.info("Nenhum AVB Secundário.")
+                    
+            except Exception as e:
+                st.error(f"Erro no processamento dos cálculos: {e}")
