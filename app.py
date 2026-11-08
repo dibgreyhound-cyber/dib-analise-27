@@ -112,7 +112,6 @@ def extrair(url):
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs: return None, None, "Sem galgos."
         
-        # Se a distância ainda for o padrão, pega do 1º galgo
         if meta["dist"] == "480" and dogs[0].get("forms"):
             meta["dist"] = get_dist_val(dogs[0]["forms"][0].get("distance"))
 
@@ -133,7 +132,7 @@ def extrair(url):
                     "Fin": str(c.get("outcomeDesc", "6")), "Remarks": c.get("closeUpCmnt", ""), 
                     "Peso_Atual_Card": p_card, "Peso_Corrida": float(c.get("weight", 0) or 0),
                     "Dias": (d_obj - datetime.strptime(c.get("raceTime", dt)[:10], "%Y-%m-%d")).days, 
-                    "Grade": str(g), "Data_Corrida": c.get("raceTime", "")[:10], "Total_Caes": total
+                    "Grade_Str": str(g), "Data_Corrida": c.get("raceTime", "")[:10], "Total_Caes": total
                 })
                 
         if not regs: return None, None, f"Nenhum galgo possui histórico na distância de {meta['dist']}m."
@@ -149,8 +148,9 @@ def render_avb(v, d, f):
             diff = float(x) - float(y)
             return f"{int(x)} ({int(diff):+d})" if i else f"{float(x):.2f} ({diff:+.2f})"
         except: return str(x)
-    rv = {"AvB": f"⭐ {v['Trap']} {v['Galgo']}", "Overall": round(v['Overall'], 2), "Cat": v['Cat'], "Perfil": v['Perfil'], "Histórico": v['Histórico'], "Peso": v['Peso'], "Dias": v['Dias'], "Split": round(v['Split'], 2), "Time": round(v['Time'], 2), "Time_Ajust": round(v['Time_Ajust'], 2), "M_Split": round(v['M_Split'], 2), "M_Time": round(v['M_Time'], 2), "Ritmo": round(v['Ritmo'], 2), "Recup_Str": v['Recup_Str'], "Confianca": f"{v['Confianca']}%", "Força": round(f, 2)}
-    rd = {"AvB": f"   {d['Trap']} {d['Galgo']}", "Overall": fmt(d['Overall'], v['Overall']), "Cat": fmt(d['Cat'], v['Cat'], True), "Perfil": d['Perfil'], "Histórico": d['Histórico'], "Peso": fmt(d['Peso'], v['Peso']), "Dias": fmt(d['Dias'], v['Dias'], True), "Split": fmt(d['Split'], v['Split']), "Time": fmt(d['Time'], v['Time']), "Time_Ajust": fmt(d['Time_Ajust'], v['Time_Ajust']), "M_Split": fmt(d['M_Split'], v['M_Split']), "M_Time": fmt(d['M_Time'], v['M_Time']), "Ritmo": fmt(d['Ritmo'], v['Ritmo']), "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)", "Força": ""}
+    # AQUI FOI TROCADO 'Histórico' POR 'Grade'
+    rv = {"AvB": f"⭐ {v['Trap']} {v['Galgo']}", "Overall": round(v['Overall'], 2), "Cat": v['Cat'], "Perfil": v['Perfil'], "Grade": v['Grade'], "Peso": v['Peso'], "Dias": v['Dias'], "Split": round(v['Split'], 2), "Time": round(v['Time'], 2), "Time_Ajust": round(v['Time_Ajust'], 2), "M_Split": round(v['M_Split'], 2), "M_Time": round(v['M_Time'], 2), "Ritmo": round(v['Ritmo'], 2), "Recup_Str": v['Recup_Str'], "Confianca": f"{v['Confianca']}%", "Força": round(f, 2)}
+    rd = {"AvB": f"   {d['Trap']} {d['Galgo']}", "Overall": fmt(d['Overall'], v['Overall']), "Cat": fmt(d['Cat'], v['Cat'], True), "Perfil": d['Perfil'], "Grade": d['Grade'], "Peso": fmt(d['Peso'], v['Peso']), "Dias": fmt(d['Dias'], v['Dias'], True), "Split": fmt(d['Split'], v['Split']), "Time": fmt(d['Time'], v['Time']), "Time_Ajust": fmt(d['Time_Ajust'], v['Time_Ajust']), "M_Split": fmt(d['M_Split'], v['M_Split']), "M_Time": fmt(d['M_Time'], v['M_Time']), "Ritmo": fmt(d['Ritmo'], v['Ritmo']), "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)", "Força": ""}
     return pd.DataFrame([rv, rd, {c: "-" for c in rv.keys()}])
 
 # =========================================================
@@ -177,7 +177,7 @@ if st.button("Analisar", type="primary") and url:
                     for n, g in df.groupby("Galgo"):
                         g = g.sort_values("Data_Corrida", ascending=False)
                         u_g = g.iloc[0]
-                        val = g[g['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
+                        val = g[g['Grade_Str'].str.match(r'^A\d{1,2}$', na=False)].copy()
                         if val.empty: continue
                         
                         u_o = val.iloc[0]
@@ -190,7 +190,7 @@ if st.button("Analisar", type="primary") and url:
                         rec_str = f"{rec_med:.2f}% ({(clean['Bend_1'] > clean['Fin_num']).sum()}/{(clean['Bend_1'] < clean['Fin_num']).sum()})" if not clean.empty else "0.00% (0/0)"
                         
                         # Categoria
-                        m_h = re.search(r'A(\d+)', cat_h); m_u = re.search(r'A(\d+)', u_o["Grade"])
+                        m_h = re.search(r'A(\d+)', cat_h); m_u = re.search(r'A(\d+)', u_o["Grade_Str"])
                         n_h = int(m_h.group(1)) if m_h else 5; n_u = int(m_u.group(1)) if m_u else 5
                         c_b = get_cat_base(cat_h); c_m = 2 if n_u < n_h else (-2 if n_u > n_h else 0)
                         cat_final = c_b + c_m
@@ -209,12 +209,13 @@ if st.button("Analisar", type="primary") and url:
                         p_pts = 10 if t_c <= 1 else (5 if t_c == 2 else 2.5)
                         
                         cnf = len(val) * 20
-                        blk = u_g["Grade"].startswith("T") or cnf < 60
+                        blk = u_g["Grade_Str"].startswith("T") or cnf < 60
                         
+                        # AQUI FOI TROCADO 'Histórico' POR 'Grade'
                         res.append({
                             "Trap": u_g["Trap"], "Galgo_Original": n, "Galgo": f"[BLOQUEADO] {n}" if blk else n, 
                             "Cat_Base": c_b, "Mod": c_m, "Cat": cat_final, "Fatores": round(f_mom + f_peso + f_dias + f_rem, 2), 
-                            "Perfil": perf, "P_pts": p_pts, "Histórico": "·".join(val["Grade"].head(5)), 
+                            "Perfil": perf, "P_pts": p_pts, "Grade": "·".join(val["Grade_Str"].head(5)), 
                             "Peso": u_o["Peso_Corrida"], "Dias": u_g["Dias"], "Split": u_o["Split"], "Time": u_o["CalTm"], 
                             "Time_Ajust": val["Time_Ajust"].mean(), "M_Split": m_s, "M_Time": m_t, "Ritmo": m_t - m_s, 
                             "Recup": rec_med, "Recup_Str": rec_str, "Confianca": cnf, "Block": blk
@@ -223,7 +224,7 @@ if st.button("Analisar", type="primary") and url:
                     if not res: st.error("Sem corridas oficiais (A).")
                     else:
                         agg = pd.DataFrame(res)
-                        # Overall Base 100 pts (40/30/15/15) + Fatores + Categoria + Perfil + Recup
+                        
                         agg["Overall"] = (
                             calc_prop(agg["Time_Ajust"], 40, 5) + 
                             calc_prop(agg["M_Time"], 30, 5) + 
@@ -233,58 +234,45 @@ if st.button("Analisar", type="primary") and url:
                         )
                         agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
                         
-                        # Trava de Alvo
                         t3_s = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > t3_s[-1]) & (agg["Recup"] <= 0)
                         
                         st.markdown(f"### 🏁 {meta['pista']} {meta['hora']} (BR {meta['br']}) · Race {meta['num']} · {cat_h} · {d_h}m")
                         st.info(" > ".join([f"{['🥇','🥈','🥉','4º','5º','6º'][i]} {r['Trap']} {r['Galgo'].replace('[BLOQUEADO] ', '')}" for i, r in agg.iterrows()]))
                         
-                        cols = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
+                        # AQUI FOI TROCADO 'Histórico' POR 'Grade'
+                        cols = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
                         
-                        # ==========================================
                         # AVB (Força) e Matchmaking
-                        # ==========================================
                         elig = agg[~agg["Block"]].reset_index(drop=True)
                         
                         def calc_forca(v, d):
-                            # Fórmula base: (V-D) + 100*(Md-Mv) + (Rv-Rd)/2 + (Cv-Cd)*2
                             base = (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
-                            
-                            # Ajustes Táticos (Simplificados para a lista)
                             aj = 0
-                            # Trap interna (1,2)
                             if int(v["Trap"].split()[-1]) <= 2 and int(d["Trap"].split()[-1]) > 2: aj += 5
-                            # Rápido vs não rápido
                             if v["Galgo"] == elig.iloc[0]["Galgo"] and d["Galgo"] != elig.iloc[1]["Galgo"]: aj += 5
-                            # Desvio padrão, etc (Omitido por falta de dados no JSON, mas pode ser calculado)
                             return base + aj
 
                         a_alvo, a_princ, a_sec = [], [], []
                         
-                        # 1. AVB do Alvo
                         for _, tgt in agg[agg["Is_Target"]].iterrows():
                             for _, atk in elig.iterrows():
                                 if atk["Galgo"] != tgt["Galgo"] and atk["Overall"] > tgt["Overall"]:
                                     f = calc_forca(atk, tgt)
                                     if f >= 50: a_alvo.append((atk, tgt, f))
                                     
-                        # 2 e 3. Matchmaking de Elite (Top 1 vs 3/4, Top 2 vs 4/5, Top 3 vs 5/6)
                         if len(elig) >= 3:
-                            # Top 1 vs 3 e 4
                             for j in [2, 3]:
                                 if j < len(elig) and not elig.iloc[j]["Is_Target"]:
                                     f = calc_forca(elig.iloc[0], elig.iloc[j])
                                     if f >= 50: a_princ.append((elig.iloc[0], elig.iloc[j], f))
                                     elif f >= 40: a_sec.append((elig.iloc[0], elig.iloc[j], f))
-                            # Top 2 vs 4 e 5
                             for j in [3, 4]:
                                 if j < len(elig) and not elig.iloc[j]["Is_Target"]:
                                     f = calc_forca(elig.iloc[1], elig.iloc[j])
                                     if f >= 50: a_princ.append((elig.iloc[1], elig.iloc[j], f))
                                     elif f >= 40: a_sec.append((elig.iloc[1], elig.iloc[j], f))
-                            # Top 3 vs 5 e 6
                             for j in [4, 5]:
                                 if j < len(elig) and not elig.iloc[j]["Is_Target"]:
                                     f = calc_forca(elig.iloc[2], elig.iloc[j])
