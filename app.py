@@ -48,7 +48,7 @@ def zscore_invert(s):
     return (-z) * 15 + 50
 
 # =========================================================
-# EXTRAIR DADOS DO RACING POST
+# EXTRAIR DADOS DO RACING POST (COM CABEÇALHOS CORRIGIDOS)
 # =========================================================
 def extrair_dados_racingpost(url):
     try:
@@ -63,7 +63,15 @@ def extrair_dados_racingpost(url):
         r_date = r_date_match.group(1)
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date}&blocks=form"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        # AQUI ESTÁ A CORREÇÃO DO ERRO 406
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://greyhoundbet.racingpost.com/",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+        }
         
         with st.spinner("Buscando dados no Racing Post..."):
             response = requests.get(api_url, headers=headers, timeout=15)
@@ -81,14 +89,13 @@ def extrair_dados_racingpost(url):
             trap = dog.get("trapNum", "0")
             peso = dog.get("weight", "0")
             for corrida in dog.get("forms", []):
-                # Extraindo pista e data igual ao site
                 track = corrida.get("trackName", "N/A")
                 data_corrida = corrida.get("raceTime", "N/A")[:10]
                 
                 reg = {
                     "Galgo": nome,
                     "Trap_Num": int(trap) if str(trap).isdigit() else 0,
-                    "Trap": f"[{trap}]", # Formatado igual ao site
+                    "Trap": f"[{trap}]",
                     "Track": track,
                     "Data": data_corrida,
                     "Dist": corrida.get("distance", "480m"),
@@ -127,7 +134,6 @@ if st.button("Analisar Corrida", type="primary"):
             df["Bends_early"] = df["Bends_list"].apply(lambda x: x[0])
             df["Fin_num"] = pd.to_numeric(df["Fin"].astype(str).str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
-            # Agregação
             agg = df.groupby("Galgo").agg(
                 Trap=("Trap", "last"),
                 Track=("Track", "last"),
@@ -148,18 +154,15 @@ if st.button("Analisar Corrida", type="primary"):
             agg["CalTm_std"] = agg["CalTm_std"].fillna(0)
             agg["Peso_var"] = agg["Peso_ult"] - agg["Peso_med"]
 
-            # AVBs e Overall
             agg["AVB1"] = zscore_invert(agg["Split_med"]) * 0.4 + zscore_invert(agg["CalTm_med"]) * 0.6
             agg["AVB2"] = (zscore_invert(agg["Bends_early_med"]) * 0.5 + zscore_invert(agg["Bends_med"]) * 0.25 + zscore_invert(agg["Fin_med"]) * 0.25)
             agg["AVB3"] = zscore_invert(agg["CalTm_std"])
             agg["Overall_base"] = (agg["AVB1"] * PESO_AVB1 + agg["AVB2"] * PESO_AVB2 + agg["AVB3"] * PESO_AVB3)
 
-            # Travas
             df["Split_z"] = df.groupby("Galgo")["Split"].transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0)
             trava_split = df.groupby("Galgo")["Split_z"].apply(lambda x: (x > 1.5).sum() * -2.0).reset_index()
             trava_split.columns = ["Galgo", "Trava_Split"]
             
-            # Trap para trava (precisamos do número puro)
             trap_ult = df.sort_values("Data").groupby("Galgo")["Trap_Num"].last().reset_index()
             trap_ult["Trava_Trap"] = trap_ult["Trap_Num"].map(TRAP_BONUS).fillna(0)
             
@@ -176,17 +179,15 @@ if st.button("Analisar Corrida", type="primary"):
             agg = agg.sort_values("Força", ascending=False).reset_index(drop=True)
             agg.insert(0, "Rank", agg.index + 1)
 
-            # Exibição
             tab_proj, tab_avb, tab_match, tab_dados = st.tabs([
                 "📋 Planilha de Projeção", "📊 Tabelas AVB", "⚔️ Matchmaking", "📄 Dados Brutos"
             ])
 
             with tab_proj:
                 st.subheader("Planilha de Projeção")
-                # Construindo a tabela com os nomes e a formatação do site
                 proj = pd.DataFrame({
                     "Rank": agg["Rank"],
-                    "Trp": agg["Trap"], # Agora com colchetes [1]
+                    "Trp": agg["Trap"],
                     "Galgo": agg["Galgo"],
                     "Data": agg["Data"],
                     "Track": agg["Track"],
