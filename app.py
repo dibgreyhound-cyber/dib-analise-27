@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (BLINDADO CONTRA ERROS DE CABEÇALHO)
+# EXTRAIR DADOS (BLINDADO)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -64,7 +64,7 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        # Pede os blocos de metadados (card) e do histórico (form)
+        # Requisita o card e o form
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=card,form"
         
         headers = {
@@ -75,55 +75,50 @@ def extrair_dados(url):
         
         response = requests.get(api_url, headers=headers, timeout=15)
         if response.status_code != 200:
-            st.error(f"Bloqueio do Racing Post (Código {response.status_code}).")
-            return None, None
+            return None, None, f"Bloqueio do Racing Post (Código {response.status_code})."
 
         data = response.json()
         
-        # --- BUSCA EXATA DOS METADADOS (SÓ NO CARD, NÃO NO HISTÓRICO) ---
-        race_info = {}
-        if 'card' in data and 'races' in data['card']:
-            for r in data['card']['races']:
-                if str(r.get('raceId')) == str(race_id):
-                    race_info = r
-                    break
-                    
-        # Se não achou no card, tenta no bloco 'race' isolado
-        if not race_info:
-            race_info = data.get('race', {})
-
-        pista = str(race_info.get("courseName") or race_info.get("course") or "Desconhecida").upper()
-        race_num = str(race_info.get("raceNumber") or race_info.get("raceNo") or "X")
-        
-        raw_time = str(race_info.get("time") or race_info.get("raceTime") or "")
-        hora_pista = "00:00"
-        hora_br = "00:00"
-        if raw_time:
-            match_t = re.search(r'(\d{2}:\d{2})', raw_time)
-            if match_t:
-                hora_pista = match_t.group(1)
-                h, m = map(int, hora_pista.split(':'))
-                hora_br = f"{(h-3)%24:02d}:{m:02d}"
-
-        # Pega a classe automática
-        classe_hoje = str(race_info.get("raceClass") or race_info.get("grade") or "A5").upper()
-        if not re.search(r'A\d+', classe_hoje):
-            match_c = re.search(r'\b(A\d{1,2})\b', str(race_info.get("raceTitle", "")))
-            classe_hoje = match_c.group(1) if match_c else "A5"
-            
-        metadados = {
-            "pista": pista,
-            "hora_pista": hora_pista,
-            "hora_br": hora_br,
-            "race_num": race_num,
-            "classe": classe_hoje
+        # Valores Padrão de Segurança (Caso a API mude)
+        meta = {
+            "pista": "KINSLEY", # Ou outro padrão
+            "hora_pista": "00:00",
+            "hora_br": "00:00",
+            "race_num": "X",
+            "classe": "A5"
         }
 
-        # --- EXTRAÇÃO DOS GALGOS ---
+        # Tenta achar os metadados
+        try:
+            race_info = {}
+            if 'card' in data and 'races' in data['card']:
+                for r in data['card']['races']:
+                    if str(r.get('raceId')) == str(race_id):
+                        race_info = r
+                        break
+            
+            if race_info:
+                meta["pista"] = str(race_info.get("course") or race_info.get("courseName") or meta["pista"]).upper()
+                meta["race_num"] = str(race_info.get("raceNo") or race_info.get("raceNumber") or meta["race_num"])
+                
+                raw_time = str(race_info.get("time") or "")
+                if raw_time:
+                    t_match = re.search(r'(\d{2}:\d{2})', raw_time)
+                    if t_match:
+                        meta["hora_pista"] = t_match.group(1)
+                        h, m = map(int, meta["hora_pista"].split(':'))
+                        meta["hora_br"] = f"{(h-3)%24:02d}:{m:02d}"
+                
+                cls = str(race_info.get("raceClass") or race_info.get("grade") or meta["classe"]).upper()
+                c_match = re.search(r'A\d+', cls)
+                if c_match: meta["classe"] = c_match.group(0)
+        except:
+            pass # Se falhar a extração do cabeçalho, ele segue com os padrões
+
+        # Extrai os galgos
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado encontrado no histórico dos galgos.")
-            return None, None
+            return None, None, "Nenhum dado de galgo encontrado no histórico."
 
         registros = []
         dist_hoje_str = "480" 
@@ -172,12 +167,11 @@ def extrair_dados(url):
                 registros.append(reg)
                 
         if not registros:
-            return None, None
+            return None, None, "Não foi possível processar as corridas do histórico."
             
-        return pd.DataFrame(registros), metadados
+        return pd.DataFrame(registros), meta, None
     except Exception as e:
-        st.error(f"Erro na extração: {e}")
-        return None, None
+        return None, None, f"Erro na extração: {str(e)}"
 
 # =========================================================
 # INTERFACE E LÓGICA DIB 2.7
@@ -186,9 +180,11 @@ url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.r
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
-        df_bruto, meta = extrair_dados(url_input)
+        df_bruto, meta, erro = extrair_dados(url_input)
         
-        if df_bruto is not None and not df_bruto.empty and meta is not None:
+        if erro:
+            st.error(erro)
+        elif df_bruto is not None and not df_bruto.empty:
             try:
                 classe_hoje = meta["classe"]
                 dist_hoje = df_bruto["Distancia"].iloc[0]
@@ -237,7 +233,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
-                        # Categoria (Agora usando a classe automática)
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
                         
@@ -252,12 +247,9 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             
                         cat_final = cat_base + cat_mod
                         
-                        # Fatores Táticos
                         f_mom = 3.0 if ultima_oficial["Fin_num"] == 1 else (-2.0 if ultima_oficial["Fin_num"] >= 4 and n_u >= n_h else 0.0)
-                        
                         dif_peso = abs(ultima_geral["Peso_Atual_Card"] - ultima_oficial["Peso_Corrida"])
                         f_peso = -5.0 if dif_peso > 2.0 else (-2.0 if 1.1 <= dif_peso <= 1.9 else 0.0)
-                        
                         f_dias = -5.0 if ultima_geral["Dias"] < 4 else (-3.0 if 29 <= ultima_geral["Dias"] <= 45 else (-5.0 if ultima_geral["Dias"] > 45 else 0.0))
                         
                         rems = str(ultima_oficial["Remarks"]).upper()
@@ -305,7 +297,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # CABEÇALHO AUTOMÁTICO (SEM ENTRADA MANUAL)
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
@@ -316,7 +307,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         cols_proj = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
                         
-                        # AVBs
                         elegiveis = agg[~agg["Block"]].reset_index(drop=True)
                         def calc_forca(v, d):
                             return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
