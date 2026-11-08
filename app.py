@@ -21,9 +21,6 @@ REMARKS_TABLE = {"Q": 2.0, "QAW": 2.5, "AW": 1.0, "LD": 1.0, "CLR": 1.5,
 TRAP_BONUS = {1: 2.0, 2: 1.0, 3: 0.0, 4: 0.0, 5: -1.0, 6: -2.0}
 PESO_TRAVA_VALOR = 1.5
 
-# =========================================================
-# FUNÇÕES AUXILIARES
-# =========================================================
 def parse_going(g):
     if pd.isna(g): return 0.0
     g = str(g).strip().upper().replace(" ", "")
@@ -75,7 +72,7 @@ def extrair_dados_racingpost(url):
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado encontrado para esta corrida.")
+            st.warning("Nenhum dado encontrado.")
             return None
 
         registros = []
@@ -84,10 +81,17 @@ def extrair_dados_racingpost(url):
             trap = dog.get("trapNum", "0")
             peso = dog.get("weight", "0")
             for corrida in dog.get("forms", []):
+                # Extraindo pista e data igual ao site
+                track = corrida.get("trackName", "N/A")
+                data_corrida = corrida.get("raceTime", "N/A")[:10]
+                
                 reg = {
                     "Galgo": nome,
-                    "Trap": int(trap) if str(trap).isdigit() else 0,
-                    "Distancia": corrida.get("distance", "480m"),
+                    "Trap_Num": int(trap) if str(trap).isdigit() else 0,
+                    "Trap": f"[{trap}]", # Formatado igual ao site
+                    "Track": track,
+                    "Data": data_corrida,
+                    "Dist": corrida.get("distance", "480m"),
                     "Split": corrida.get("sectionalTime"),
                     "CalTm": corrida.get("calcRTimes"),
                     "Going": corrida.get("goingType"),
@@ -95,7 +99,6 @@ def extrair_dados_racingpost(url):
                     "Fin": corrida.get("outcomeDesc"),
                     "Remarks": corrida.get("closeUpCmnt", ""),
                     "Peso_Atual": peso,
-                    "Data_Corrida": corrida.get("raceTime", "")[:10],
                 }
                 registros.append(reg)
         return pd.DataFrame(registros)
@@ -107,14 +110,13 @@ def extrair_dados_racingpost(url):
 # INTERFACE
 # =========================================================
 st.subheader("🔗 Cole o link da corrida do Racing Post")
-url_input = st.text_input("Link da corrida (Racing Post)")
+url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
 
-if st.button("Analisar Corrida"):
+if st.button("Analisar Corrida", type="primary"):
     if url_input:
         df = extrair_dados_racingpost(url_input)
         if df is not None and not df.empty:
             
-            # Sanitização
             for c in ["Split", "CalTm", "Peso_Atual"]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df["Going_offset"] = df["Going"].apply(parse_going)
@@ -125,17 +127,19 @@ if st.button("Analisar Corrida"):
             df["Bends_early"] = df["Bends_list"].apply(lambda x: x[0])
             df["Fin_num"] = pd.to_numeric(df["Fin"].astype(str).str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
-            # Agregação (Médias por Galgo)
+            # Agregação
             agg = df.groupby("Galgo").agg(
                 Trap=("Trap", "last"),
-                Distancia=("Distancia", "last"),
-                Corridas=("CalTm", "count"),
+                Track=("Track", "last"),
+                Data=("Data", "last"),
+                Dist=("Dist", "last"),
                 Split_med=("Split", "mean"),
                 CalTm_med=("CalTm_adj", "mean"),
                 Going_med=("Going_offset", "mean"),
                 Bends_med=("Bends_avg", "mean"),
                 Bends_early_med=("Bends_early", "mean"),
                 Fin_med=("Fin_num", "mean"),
+                Remark_total=("Remark_bonus", "sum"),
                 Peso_med=("Peso_Atual", "mean"),
                 Peso_ult=("Peso_Atual", "last"),
                 CalTm_std=("CalTm_adj", "std"),
@@ -144,26 +148,27 @@ if st.button("Analisar Corrida"):
             agg["CalTm_std"] = agg["CalTm_std"].fillna(0)
             agg["Peso_var"] = agg["Peso_ult"] - agg["Peso_med"]
 
-            # Cálculo AVBs
+            # AVBs e Overall
             agg["AVB1"] = zscore_invert(agg["Split_med"]) * 0.4 + zscore_invert(agg["CalTm_med"]) * 0.6
-            agg["AVB2"] = (zscore_invert(agg["Bends_early_med"]) * 0.5
-                           + zscore_invert(agg["Bends_med"]) * 0.25
-                           + zscore_invert(agg["Fin_med"]) * 0.25)
+            agg["AVB2"] = (zscore_invert(agg["Bends_early_med"]) * 0.5 + zscore_invert(agg["Bends_med"]) * 0.25 + zscore_invert(agg["Fin_med"]) * 0.25)
             agg["AVB3"] = zscore_invert(agg["CalTm_std"])
             agg["Overall_base"] = (agg["AVB1"] * PESO_AVB1 + agg["AVB2"] * PESO_AVB2 + agg["AVB3"] * PESO_AVB3)
 
-            # Travas e Força
+            # Travas
             df["Split_z"] = df.groupby("Galgo")["Split"].transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0)
             trava_split = df.groupby("Galgo")["Split_z"].apply(lambda x: (x > 1.5).sum() * -2.0).reset_index()
             trava_split.columns = ["Galgo", "Trava_Split"]
-            trap_ult = df.sort_values("Data_Corrida").groupby("Galgo")["Trap"].last().reset_index()
-            trap_ult["Trava_Trap"] = trap_ult["Trap"].map(TRAP_BONUS).fillna(0)
+            
+            # Trap para trava (precisamos do número puro)
+            trap_ult = df.sort_values("Data").groupby("Galgo")["Trap_Num"].last().reset_index()
+            trap_ult["Trava_Trap"] = trap_ult["Trap_Num"].map(TRAP_BONUS).fillna(0)
+            
             agg["Trava_Peso"] = agg["Peso_var"].apply(lambda v: -PESO_TRAVA_VALOR if v < -0.5 else (PESO_TRAVA_VALOR if v > 0.5 else 0.0))
             
             agg = agg.merge(trava_split, on="Galgo", how="left").merge(trap_ult[["Galgo", "Trava_Trap"]], on="Galgo", how="left")
             
-            agg["Bonus_Remarks"] = agg["Remark_total"] = df.groupby("Galgo")["Remark_bonus"].sum().values
-            agg["Forca_bruta"] = (agg["Overall_base"] + agg["Trava_Split"].fillna(0) + agg["Trava_Trap"].fillna(0) + agg["Trava_Peso"].fillna(0) + agg["Bonus_Remarks"].clip(-5, 5))
+            agg["Bonus_Remarks"] = agg["Remark_total"].clip(-5, 5)
+            agg["Forca_bruta"] = (agg["Overall_base"] + agg["Trava_Split"].fillna(0) + agg["Trava_Trap"].fillna(0) + agg["Trava_Peso"].fillna(0) + agg["Bonus_Remarks"])
             
             fmin, fmax = agg["Forca_bruta"].min(), agg["Forca_bruta"].max()
             agg["Força"] = ((agg["Forca_bruta"] - fmin) / (fmax - fmin) * 100 if fmax > fmin else 50.0)
@@ -171,25 +176,23 @@ if st.button("Analisar Corrida"):
             agg = agg.sort_values("Força", ascending=False).reset_index(drop=True)
             agg.insert(0, "Rank", agg.index + 1)
 
-            # =========================================================
-            # EXIBIÇÃO - ABAS
-            # =========================================================
-            tab_proj, tab_avb1, tab_avb2, tab_avb3, tab_match, tab_dados = st.tabs([
-                "📋 Planilha de Projeção", "📊 AVB 1 (Velocidade)", "📊 AVB 2 (Posição)", 
-                "📊 AVB 3 (Consistência)", "⚔️ Matchmaking", "📄 Dados Brutos"
+            # Exibição
+            tab_proj, tab_avb, tab_match, tab_dados = st.tabs([
+                "📋 Planilha de Projeção", "📊 Tabelas AVB", "⚔️ Matchmaking", "📄 Dados Brutos"
             ])
 
             with tab_proj:
-                st.subheader("Planilha de Projeção (12 Colunas)")
-                # Construindo as 12 colunas exatas
+                st.subheader("Planilha de Projeção")
+                # Construindo a tabela com os nomes e a formatação do site
                 proj = pd.DataFrame({
                     "Rank": agg["Rank"],
+                    "Trp": agg["Trap"], # Agora com colchetes [1]
                     "Galgo": agg["Galgo"],
-                    "Trap": agg["Trap"],
-                    "Dist.": agg["Distancia"],
+                    "Data": agg["Data"],
+                    "Track": agg["Track"],
+                    "Dist.": agg["Dist"],
                     "Split": agg["Split_med"].round(2),
                     "CalTm": agg["CalTm_med"].round(2),
-                    "Going": agg["Going_med"].round(2),
                     "Bends": agg["Bends_med"].round(1),
                     "Fin": agg["Fin_med"].round(1),
                     "AVB1": agg["AVB1"].round(1),
@@ -198,26 +201,15 @@ if st.button("Analisar Corrida"):
                 })
                 st.dataframe(proj, use_container_width=True, hide_index=True)
 
-            with tab_avb1:
-                st.subheader("AVB 1 — Comparativo de Velocidade (Split + CalTm)")
-                media_avb1 = agg["AVB1"].mean()
-                df_avb1 = agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].copy()
-                df_avb1["Diferença p/ Média"] = (df_avb1["AVB1"] - media_avb1).round(1)
-                st.dataframe(df_avb1.sort_values("AVB1", ascending=False).round(2), use_container_width=True, hide_index=True)
-
-            with tab_avb2:
-                st.subheader("AVB 2 — Comparativo de Posicionamento (Bends + Fin)")
-                media_avb2 = agg["AVB2"].mean()
-                df_avb2 = agg[["Galgo", "AVB2", "Bends_early_med", "Fin_med"]].copy()
-                df_avb2["Diferença p/ Média"] = (df_avb2["AVB2"] - media_avb2).round(1)
-                st.dataframe(df_avb2.sort_values("AVB2", ascending=False).round(2), use_container_width=True, hide_index=True)
-
-            with tab_avb3:
-                st.subheader("AVB 3 — Comparativo de Consistência")
-                media_avb3 = agg["AVB3"].mean()
-                df_avb3 = agg[["Galgo", "AVB3", "CalTm_std"]].copy()
-                df_avb3["Diferença p/ Média"] = (df_avb3["AVB3"] - media_avb3).round(1)
-                st.dataframe(df_avb3.sort_values("AVB3", ascending=False).round(2), use_container_width=True, hide_index=True)
+            with tab_avb:
+                st.subheader("Comparativo AVB 1 (Velocidade)")
+                st.dataframe(agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].sort_values("AVB1", ascending=False).round(2), use_container_width=True, hide_index=True)
+                
+                st.subheader("Comparativo AVB 2 (Posicionamento)")
+                st.dataframe(agg[["Galgo", "AVB2", "Bends_early_med", "Fin_med"]].sort_values("AVB2", ascending=False).round(2), use_container_width=True, hide_index=True)
+                
+                st.subheader("Comparativo AVB 3 (Consistência)")
+                st.dataframe(agg[["Galgo", "AVB3", "CalTm_std"]].sort_values("AVB3", ascending=False).round(2), use_container_width=True, hide_index=True)
 
             with tab_match:
                 st.subheader("Confrontos Sugeridos")
@@ -226,7 +218,7 @@ if st.button("Analisar Corrida"):
                     a, b = agg.iloc[i], agg.iloc[i + 1]
                     dif = a["Força"] - b["Força"]
                     pares.append({
-                        "Confronto": f"{a['Galgo']} (Trap {a['Trap']}) vs {b['Galgo']} (Trap {b['Trap']})",
+                        "Confronto": f"{a['Trap']} {a['Galgo']} vs {b['Trap']} {b['Galgo']}",
                         "Força A": round(a["Força"], 1),
                         "Força B": round(b["Força"], 1),
                         "Favorito": a["Galgo"] if dif >= 0 else b["Galgo"],
@@ -235,7 +227,4 @@ if st.button("Analisar Corrida"):
                 st.dataframe(pd.DataFrame(pares), use_container_width=True, hide_index=True)
 
             with tab_dados:
-                st.dataframe(df.drop(columns=["Bends_list"]), use_container_width=True)
-
-    else:
-        st.warning("Cole um link válido.")
+                st.dataframe(df.drop(columns=["Bends_list", "Trap_Num"]), use_container_width=True)
