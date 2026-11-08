@@ -52,11 +52,20 @@ def extrair(url):
         rid = re.search(r"race_id=(\d+)", url).group(1)
         dt = re.search(r"r_date=([\d-]+)", url).group(1)
         d_obj = datetime.strptime(dt, "%Y-%m-%d")
-        api = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
-        h = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        res = requests.get(api, headers=h, timeout=15)
-        if res.status_code != 200: return None, None, "Bloqueio."
+        
+        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
+        
+        # --- AQUI ESTÁ O SEGREDO: USANDO PROXY PARA NÃO SER BLOQUEADO ---
+        proxy_url = f"https://api.codetabs.com/v1/proxy?quest={requests.utils.quote(api_url)}"
+        
+        h = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(proxy_url, headers=h, timeout=20)
+        
+        if res.status_code != 200: 
+            return None, None, f"Falha na conexão via Proxy. Código: {res.status_code}"
+        
         data = res.json()
+        
         meta = {"pista": "KINSLEY", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5"}
         try:
             for r in data.get('card', {}).get('races', []):
@@ -74,8 +83,10 @@ def extrair(url):
                     if c_match: meta["cat"] = c_match.group(0)
                     break
         except: pass
+        
         dogs = data.get("form", {}).get("dogs", [])
-        if not dogs: return None, None, "Sem galgos."
+        if not dogs: return None, None, "Sem galgos no arquivo."
+        
         regs, dist = [], "480"
         total = len(dogs)
         for dog in dogs:
@@ -116,7 +127,7 @@ def render_avb(v, d, f):
 
 url = st.text_input("Link da corrida")
 if st.button("Analisar", type="primary") and url:
-    with st.spinner("Processando..."):
+    with st.spinner("Buscando dados via Proxy..."):
         df_b, meta, err = extrair(url)
         if err: st.error(err)
         elif df_b is not None and not df_b.empty:
