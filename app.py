@@ -48,7 +48,6 @@ def get_emoji(t):
     return {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}.get(int(t), str(t))
 
 def clean_dist(val):
-    """Limpa a string da distância (ex: '480m' ou ' 480 ' vira '480')"""
     if not val: return ""
     return "".join(filter(str.isdigit, str(val)))
 
@@ -89,6 +88,7 @@ def extrair(url):
                     break
         except: pass
             
+        # Pega a distância exata do título (ex: "A5 - 480m Flat")
         if race_info:
             meta["pista"] = str(race_info.get("course", meta["pista"])).upper()
             meta["num"] = str(race_info.get("raceNo", meta["num"]))
@@ -98,25 +98,21 @@ def extrair(url):
                 if match:
                     meta["hora"] = match.group(1)
                     meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
+            
+            title = str(race_info.get("raceTitle", ""))
+            m_dist = re.search(r'(\d{3,4})\s*m', title)
+            if m_dist: 
+                meta["dist"] = m_dist.group(1)
+            else:
+                dist_raw = str(race_info.get("dist") or race_info.get("distance") or "")
+                if dist_raw: meta["dist"] = clean_dist(dist_raw)
+            
             cls = str(race_info.get("raceClass", meta["cat"])).upper()
             c_match = re.search(r'A\d+', cls)
             if c_match: meta["cat"] = c_match.group(0)
-            
+        
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs: return None, None, "Sem galgos no arquivo."
-        
-        # --- ENCONTRA A DISTÂNCIA OLHANDO O HISTÓRICO DO PRIMEIRO GALGO ---
-        dist_alvo = None
-        for dog in dogs:
-            forms = dog.get("forms", [])
-            if forms:
-                # Pega a distância da corrida mais recente do primeiro galgo
-                f0 = forms[0]
-                dist_alvo = clean_dist(f0.get("distance") or f0.get("dist") or f0.get("dis"))
-                if dist_alvo: break
-                
-        if not dist_alvo: dist_alvo = "480" # Fallback de segurança
-        meta["dist"] = dist_alvo
         
         regs, total = [], len(dogs)
         dists_encontradas = set()
@@ -131,13 +127,28 @@ def extrair(url):
             if not forms: continue
             
             for c in forms:
-                # Pega a distância exata da coluna "Dis" (distance/dist)
-                d_val = c.get("distance") or c.get("dist") or c.get("dis")
-                d_num = clean_dist(d_val)
-                
+                # Procura a distância em QUALQUER chave que tenha 'dist', 'dis' ou 'metre'
+                d_num = None
+                for k, v in c.items():
+                    if "dist" in k.lower() or "dis" in k.lower() or "metre" in k.lower():
+                        if v:
+                            d_num = clean_dist(v)
+                            break
+                            
+                # Se não achou nas chaves, tenta achar uma string tipo "480m" nos valores
+                if not d_num:
+                    for v in c.values():
+                        if isinstance(v, str) and re.match(r'^\d{3,4}m?$', v.strip()):
+                            d_num = clean_dist(v)
+                            break
+                            
+                # Se não achou de jeito nenhum, assume a distância da prova para não perder o dado
+                if not d_num:
+                    d_num = meta["dist"]
+                    
                 if d_num: dists_encontradas.add(d_num)
                 
-                # Compara a distância da corrida com a distância alvo
+                # Se a distância não for a mesma da prova, pula a corrida
                 if d_num != meta["dist"]:
                     continue
                     
