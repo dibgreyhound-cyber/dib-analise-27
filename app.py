@@ -3,8 +3,6 @@ import pandas as pd
 import numpy as np
 import re
 import requests
-from urllib.parse import urlparse, parse_qs
-from datetime import datetime
 
 st.set_page_config(page_title="DIB 2.7 - Análise", layout="wide")
 st.title("🐾 Análise DIB 2.7")
@@ -57,24 +55,28 @@ def zscore_invert(s):
 # =========================================================
 def extrair_dados_racingpost(url):
     try:
-        parsed = urlparse(url)
-        frag = parsed.fragment
-        qs = parse_qs(frag.split("?")[1] if "?" in frag else "")
-        race_id = qs.get("race_id", [None])[0]
-        r_date = qs.get("r_date", [None])[0]
-        if not race_id or not r_date:
-            st.error("Link inválido. O link deve conter 'race_id' e 'r_date'.")
+        # O robô novo procura o ID e a Data em qualquer parte do link
+        race_id_match = re.search(r"race_id=(\d+)", url)
+        r_date_match = re.search(r"r_date=([\d-]+)", url)
+
+        if not race_id_match or not r_date_match:
+            st.error("Link inválido. O link precisa ter 'race_id=123' e 'r_date=2026-11-08'.")
             return None
+
+        race_id = race_id_match.group(1)
+        r_date = r_date_match.group(1)
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date}&blocks=form"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        response = requests.get(api_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        
+        with st.spinner("Buscando dados no Racing Post... isso pode levar alguns segundos."):
+            response = requests.get(api_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado encontrado para esta corrida.")
+            st.warning("Nenhum dado de galgo encontrado para esta corrida. O site pode ter mudado o formato ou a corrida ainda não tem histórico.")
             return None
 
         registros = []
@@ -85,7 +87,7 @@ def extrair_dados_racingpost(url):
             for corrida in dog.get("forms", []):
                 reg = {
                     "Galgo": nome,
-                    "Trap": int(trap),
+                    "Trap": int(trap) if str(trap).isdigit() else 0,
                     "Split": corrida.get("sectionalTime"),
                     "CalTm": corrida.get("calcRTimes"),
                     "Going": corrida.get("goingType"),
@@ -110,13 +112,10 @@ url_input = st.text_input("Exemplo: https://greyhoundbet.racingpost.com/#card/ra
 
 if st.button("Analisar Corrida"):
     if url_input:
-        with st.spinner("Buscando dados no Racing Post..."):
-            df = extrair_dados_racingpost(url_input)
+        df = extrair_dados_racingpost(url_input)
         if df is not None and not df.empty:
             st.success(f"✅ {len(df)} corridas extraídas com sucesso!")
-            # =========================================================
-            # PROCESSAMENTO (mesma lógica de antes, adaptada)
-            # =========================================================
+            
             for c in ["Split", "CalTm", "Peso_Atual"]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df["Going_offset"] = df["Going"].apply(parse_going)
@@ -213,11 +212,5 @@ if st.button("Analisar Corrida"):
             with t4:
                 st.dataframe(df.drop(columns=["Bends_list"]), use_container_width=True)
 
-            st.download_button(
-                "⬇️ Baixar resultados (CSV)",
-                agg.to_csv(index=False).encode("utf-8"),
-                file_name="dib27_resultado.csv",
-                mime="text/csv",
-            )
     else:
         st.warning("Cole um link válido do Racing Post.")
