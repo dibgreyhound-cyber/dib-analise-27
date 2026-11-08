@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
 st.title("🐾 Análise DIB 2.7")
@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (BLINDADO)
+# EXTRAIR DADOS (AGORA COM PISTA E HORÁRIO)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -75,14 +75,57 @@ def extrair_dados(url):
         response = requests.get(api_url, headers=headers, timeout=15)
         if response.status_code != 200:
             st.error(f"Bloqueio do Racing Post (Código {response.status_code}).")
-            return None
+            return None, None
 
         data = response.json()
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
             st.warning("Nenhum dado encontrado.")
-            return None
+            return None, None
 
+        # --- BUSCA DE METADADOS (PISTA E HORA) ---
+        pista = "Pista Desconhecida"
+        hora_pista_str = "00:00"
+        hora_br_str = "00:00"
+        race_num = "X"
+
+        # Tenta pegar da raiz do JSON primeiro
+        if "meeting" in data and isinstance(data["meeting"], dict):
+            pista = data["meeting"].get("trackName", data["meeting"].get("course", pista))
+        if "race" in data and isinstance(data["race"], dict):
+            race_num = data["race"].get("raceNumber", data["race"].get("raceNo", race_num))
+            raw_time = data["race"].get("raceTime", "")
+        else:
+            raw_time = ""
+
+        # Se não achou na raiz, busca no histórico do primeiro cão
+        if pista == "Pista Desconhecida" or not raw_time:
+            first_form = dogs[0].get("forms", [{}])[0] if dogs[0].get("forms") else {}
+            pista = first_form.get("trackName", first_form.get("track", first_form.get("course", pista)))
+            if not raw_time: raw_time = first_form.get("raceTime", "")
+
+        # Converte o horário
+        if raw_time:
+            try:
+                # Formato esperado: "2026-11-08T11:41:00" ou "2026-11-08 11:41:00"
+                time_part = raw_time.split("T")[1] if "T" in raw_time else raw_time.split(" ")[1]
+                hora_pista_str = time_part[:5] # Pega HH:MM
+                
+                # Converte para BR (-3 horas)
+                dt_obj = datetime.strptime(hora_pista_str, "%H:%M")
+                dt_br = dt_obj - timedelta(hours=3)
+                hora_br_str = dt_br.strftime("%H:%M")
+            except Exception:
+                pass
+
+        metadados = {
+            "pista": pista.upper(),
+            "hora_pista": hora_pista_str,
+            "hora_br": hora_br_str,
+            "race_num": race_num
+        }
+
+        # --- EXTRAÇÃO DOS DADOS DOS GALGOS ---
         registros = []
         dist_hoje_str = "480" 
         total_caes = len(dogs)
@@ -95,15 +138,13 @@ def extrair_dados(url):
             forms = dog.get("forms", [])
             if not forms: continue
 
-            # Pega a distância da corrida de hoje
             dist_hoje_str = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
 
             for corrida in forms:
-                # A MÁGICA BLINDADA: Procura a grade em QUALQUER lugar do texto da corrida
-                grade = "A5" # Padrão caso não ache nada
+                grade = "A5"
                 for k, v in corrida.items():
                     if isinstance(v, str):
-                        match = re.match(r'^([A-Z]\d{1,2})$', v.strip().upper())
+                        match = re.search(r'\b(A\d{1,2})\b', v.strip().upper())
                         if match:
                             grade = match.group(1)
                             break
@@ -130,13 +171,12 @@ def extrair_dados(url):
                 registros.append(reg)
                 
         if not registros:
-            st.warning("Não foi possível extrair nenhuma corrida do histórico.")
-            return None
+            return None, None
             
-        return pd.DataFrame(registros)
+        return pd.DataFrame(registros), metadados
     except Exception as e:
         st.error(f"Erro na extração: {e}")
-        return None
+        return None, None
 
 # =========================================================
 # INTERFACE E LÓGICA DIB 2.7
@@ -146,18 +186,16 @@ classe_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A5
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
-        df_bruto = extrair_dados(url_input)
+        df_bruto, meta = extrair_dados(url_input)
         
-        if df_bruto is not None and not df_bruto.empty:
+        if df_bruto is not None and not df_bruto.empty and meta is not None:
             try:
-                # 1. Filtrar distância exata
                 dist_hoje = df_bruto["Distancia"].iloc[0]
                 df = df_bruto[(df_bruto["Distancia"] == dist_hoje) & (df_bruto["CalTm"] > 0)].copy()
                 
                 if df.empty:
                     st.warning(f"Nenhum galgo com corrida válida na distância de {dist_hoje}m.")
                 else:
-                    # 2. Cálculos por Corrida
                     df["Going_adj"] = df["Going"].apply(parse_going)
                     df["Traffic_adj"] = df["Remarks"].apply(parse_traffic)
                     df["Time_Ajust"] = df["CalTm"] - df["Going_adj"] - df["Traffic_adj"]
@@ -172,7 +210,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         group = group.sort_values("Data_Corrida", ascending=False)
                         ultima_geral = group.iloc[0]
                         
-                        # Filtra apenas oficiais (A) para os cálculos de tempo
                         validas = group[group['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
                         if validas.empty: 
                             continue 
@@ -199,7 +236,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
-                        # Cálculo da Categoria
+                        # Categoria
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
                         
@@ -208,12 +245,9 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         
                         cat_base = get_cat_base(classe_hoje)
                         
-                        if n_u < n_h:
-                            cat_mod = 2
-                        elif n_u > n_h:
-                            cat_mod = -2
-                        else:
-                            cat_mod = 0
+                        if n_u < n_h: cat_mod = 2
+                        elif n_u > n_h: cat_mod = -2
+                        else: cat_mod = 0
                             
                         cat_final = cat_base + cat_mod
                         
@@ -243,8 +277,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
 
                         res.append({
                             "Trap": ultima_geral["Trap"], "Galgo_Original": nome, "Galgo": nome_exibicao, 
-                            "Cat": cat_final, "Mod": cat_mod, "Fatores": round(f_total, 2),
-                            "Perfil": perfil, "P_pts": p_pts,
+                            "Cat_Base": cat_base, "Mod": cat_mod, "Cat": cat_final, 
+                            "Fatores": round(f_total, 2), "Perfil": perfil, "P_pts": p_pts,
                             "Histórico": "·".join(validas["Grade"].head(5)), 
                             "Peso": ultima_oficial["Peso_Corrida"], "Dias": ultima_geral["Dias"],
                             "Split": ultima_oficial["Split"], "Time": ultima_oficial["CalTm"], "Time_Ajust": m_ajust, 
@@ -253,12 +287,9 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             "Confianca": conf, "Block": is_blocked
                         })
                     
-                    if not res:
-                        st.error("Nenhum galgo passou pelos filtros de cálculo. Verifique se há corridas oficiais nesta distância.")
-                    else:
+                    if res:
                         agg = pd.DataFrame(res)
                         
-                        # Base de Velocidade
                         pts_ajust = calc_prop_points(agg["Time_Ajust"], 40, 5)
                         pts_mtime = calc_prop_points(agg["M_Time"], 30, 5)
                         pts_msplit = calc_prop_points(agg["M_Split"], 15, 2)
@@ -273,23 +304,23 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        st.markdown(f"### 🏁 {classe_hoje} · {dist_hoje}m")
+                        # --- CABEÇALHO FORMATADO (PISTA, HORA E BR) ---
+                        header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
+                        st.markdown(header)
+
                         medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
                         ranking = " > ".join([f"{medals[i]} {row['Trap']} {row['Galgo'].replace('[BLOQUEADO] ', '')}" for i, row in agg.iterrows()])
                         st.info(ranking)
 
-                        cols_proj = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Histórico", "Posicao_Med", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
-                        agg["Posicao_Med"] = "-" 
-                        
+                        cols_proj = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
-
+                        
                         # AVBs
                         elegiveis = agg[~agg["Block"]].reset_index(drop=True)
                         def calc_forca(v, d):
                             return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
 
                         avbs_alvo, avbs_princ, avbs_sec = [], [], []
-                        
                         for _, tgt in agg[agg["Is_Target"]].iterrows():
                             for _, atk in elegiveis[elegiveis["Overall"] > tgt["Overall"]].iterrows():
                                 f = calc_forca(atk, tgt)
