@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (CORRIGIDO COM ANTI-BLOQUEIO)
+# EXTRAIR DADOS (CORRIGIDO A GRADe)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -66,30 +66,21 @@ def extrair_dados(url):
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
         
-        # Cabeçalhos de um navegador real para evitar bloqueio do site
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
             "Referer": "https://greyhoundbet.racingpost.com/"
         }
         
         response = requests.get(api_url, headers=headers, timeout=15)
-        
-        # Verifica se o site bloqueou (Erro 403) ou se a página não existe (Erro 404)
         if response.status_code != 200:
-            st.error(f"Erro de conexão: O Racing Post bloqueou o acesso (Código {response.status_code}). Tente novamente em alguns minutos.")
+            st.error(f"Bloqueio do Racing Post (Código {response.status_code}).")
             return None
 
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError:
-            st.error("O Racing Post retornou uma página em HTML em vez dos dados. O link pode estar errado ou expirou.")
-            return None
-
+        data = response.json()
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado encontrado. Verifique se a corrida tem histórico.")
+            st.warning("Nenhum dado encontrado.")
             return None
 
         registros = []
@@ -107,11 +98,15 @@ def extrair_dados(url):
             dist_hoje_str = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
 
             for corrida in forms:
-                grade = "A6"
-                for k in ["grade", "gr", "raceGrade", "grde", "class", "cls"]:
+                # --- A MÁGICA PARA ACHAR A GRADe CORRETA ---
+                grade = "N/A"
+                # Procura em todas as chaves possíveis que o Racing Post usa
+                for k in ["gr", "grade", "raceGrade", "race_grade", "gradeName", "class", "cls", "raceClass"]:
                     if k in corrida and corrida[k]:
-                        grade = str(corrida[k]).upper().strip()
-                        break
+                        val = str(corrida[k]).upper().strip()
+                        if re.match(r'^[A-Z]\d{1,2}$', val): # Só aceita se for tipo A5, T2, etc.
+                            grade = val
+                            break
 
                 dist_corrida_str = re.sub(r'[^\d]', '', str(corrida.get("distance", "480")))
                 peso_corrida = float(corrida.get("weight", 0) or 0)
@@ -172,7 +167,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         group = group.sort_values("Data_Corrida", ascending=False)
                         ultima_geral = group.iloc[0]
                         
-                        validas = group[~group['Grade'].str.startswith(('T', 'HP'))].copy()
+                        # Filtra apenas oficiais (A) para os cálculos de tempo
+                        validas = group[group['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
                         if validas.empty: continue 
                         
                         ultima_oficial = validas.iloc[0]
@@ -197,15 +193,16 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
-                        # Cálculo da Categoria (Corrigido)
+                        # --- CÁLCULO DA CATEGORIA (REGRA DIB 2.7) ---
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
                         
-                        n_h = int(match_h.group(1)) if match_h else 6
-                        n_u = int(match_u.group(1)) if match_u else 6
+                        n_h = int(match_h.group(1)) if match_h else 5 # Hoje
+                        n_u = int(match_u.group(1)) if match_u else 5 # Última oficial
                         
                         cat_base = get_cat_base(classe_hoje)
                         
+                        # Desceu (A3 -> A5) = +2 | Subiu (A6 -> A5) = -2
                         if n_u < n_h:
                             cat_mod = 2
                         elif n_u > n_h:
@@ -243,7 +240,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             "Trap": ultima_geral["Trap"], "Galgo_Original": nome, "Galgo": nome_exibicao, 
                             "Cat": cat_final, "Mod": cat_mod, "Fatores": round(f_total, 2),
                             "Perfil": perfil, "P_pts": p_pts,
-                            "Grade": "·".join(validas["Grade"].head(5)), 
+                            # Salva as grades usadas para você conferir na tabela!
+                            "Histórico": "·".join(validas["Grade"].head(5)), 
                             "Peso": ultima_oficial["Peso_Corrida"], "Dias": ultima_geral["Dias"],
                             "Split": ultima_oficial["Split"], "Time": ultima_oficial["CalTm"], "Time_Ajust": m_ajust, 
                             "M_Split": m_split, "M_Time": m_time, "Ritmo": ritmo,
@@ -274,8 +272,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     st.info(ranking)
 
                     cols_proj = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Histórico", "Posicao_Med", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
-                    
-                    agg["Histórico"] = agg["Grade"]
                     agg["Posicao_Med"] = "-" 
                     
                     st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
