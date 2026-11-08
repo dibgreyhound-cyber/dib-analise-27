@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (AGORA COM PISTA E HORÁRIO)
+# EXTRAIR DADOS (AGORA COM O BLOCO 'RACE' CORRETO)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -64,7 +64,8 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
+        # AQUI ESTÁ A CORREÇÃO: blocks=race,form para pegar os dados da prova de hoje
+        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=race,form"
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -78,54 +79,40 @@ def extrair_dados(url):
             return None, None
 
         data = response.json()
-        dogs = data.get("form", {}).get("dogs", [])
-        if not dogs:
-            st.warning("Nenhum dado encontrado.")
-            return None, None
+        
+        # Pega os dados da corrida de hoje diretamente do bloco "race"
+        race_info = data.get("race", {})
+        pista = race_info.get("course", "Desconhecida").upper()
+        race_num = race_info.get("raceNumber", "X")
+        raw_time = race_info.get("raceTime", "") # Ex: "2026-11-08T08:41:00Z"
 
-        # --- BUSCA DE METADADOS (PISTA E HORA) ---
-        pista = "Pista Desconhecida"
+        # Converte o horário para BR (-3h)
         hora_pista_str = "00:00"
         hora_br_str = "00:00"
-        race_num = "X"
-
-        # Tenta pegar da raiz do JSON primeiro
-        if "meeting" in data and isinstance(data["meeting"], dict):
-            pista = data["meeting"].get("trackName", data["meeting"].get("course", pista))
-        if "race" in data and isinstance(data["race"], dict):
-            race_num = data["race"].get("raceNumber", data["race"].get("raceNo", race_num))
-            raw_time = data["race"].get("raceTime", "")
-        else:
-            raw_time = ""
-
-        # Se não achou na raiz, busca no histórico do primeiro cão
-        if pista == "Pista Desconhecida" or not raw_time:
-            first_form = dogs[0].get("forms", [{}])[0] if dogs[0].get("forms") else {}
-            pista = first_form.get("trackName", first_form.get("track", first_form.get("course", pista)))
-            if not raw_time: raw_time = first_form.get("raceTime", "")
-
-        # Converte o horário
         if raw_time:
             try:
-                # Formato esperado: "2026-11-08T11:41:00" ou "2026-11-08 11:41:00"
-                time_part = raw_time.split("T")[1] if "T" in raw_time else raw_time.split(" ")[1]
-                hora_pista_str = time_part[:5] # Pega HH:MM
-                
-                # Converte para BR (-3 horas)
-                dt_obj = datetime.strptime(hora_pista_str, "%H:%M")
-                dt_br = dt_obj - timedelta(hours=3)
-                hora_br_str = dt_br.strftime("%H:%M")
-            except Exception:
+                match_time = re.search(r'(\d{2}:\d{2})', raw_time)
+                if match_time:
+                    hora_pista_str = match_time.group(1)
+                    h, m = map(int, hora_pista_str.split(':'))
+                    h_br = (h - 3) % 24
+                    hora_br_str = f"{h_br:02d}:{m:02d}"
+            except:
                 pass
 
         metadados = {
-            "pista": pista.upper(),
+            "pista": pista,
             "hora_pista": hora_pista_str,
             "hora_br": hora_br_str,
             "race_num": race_num
         }
 
-        # --- EXTRAÇÃO DOS DADOS DOS GALGOS ---
+        # Extração dos galgos
+        dogs = data.get("form", {}).get("dogs", [])
+        if not dogs:
+            st.warning("Nenhum dado encontrado no histórico dos galgos.")
+            return None, None
+
         registros = []
         dist_hoje_str = "480" 
         total_caes = len(dogs)
@@ -141,13 +128,16 @@ def extrair_dados(url):
             dist_hoje_str = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
 
             for corrida in forms:
-                grade = "A5"
-                for k, v in corrida.items():
-                    if isinstance(v, str):
-                        match = re.search(r'\b(A\d{1,2})\b', v.strip().upper())
-                        if match:
-                            grade = match.group(1)
-                            break
+                # Pega a grade exata
+                grade = corrida.get("gr") or corrida.get("grade")
+                if not grade:
+                    for v in corrida.values():
+                        if isinstance(v, str):
+                            m = re.match(r'^([A-Z]\d{1,2})$', v.strip().upper())
+                            if m:
+                                grade = m.group(1)
+                                break
+                if not grade: grade = "A5" # Fallback
                             
                 dist_corrida_str = re.sub(r'[^\d]', '', str(corrida.get("distance", "480")))
                 peso_corrida = float(corrida.get("weight", 0) or 0)
@@ -304,7 +294,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # --- CABEÇALHO FORMATADO (PISTA, HORA E BR) ---
+                        # --- CABEÇALHO FORMATADO CORRETO ---
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
