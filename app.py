@@ -55,22 +55,8 @@ def get_trap_emoji(trap_num):
     trap_map = {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}
     return trap_map.get(int(trap_num), str(trap_num))
 
-# --- FUNÇÃO PARA VARRER O JSON E ACHAR OS DADOS ---
-def buscar_chave(dicionario, chaves_alvo):
-    if isinstance(dicionario, dict):
-        for k, v in dicionario.items():
-            if k in chaves_alvo and v:
-                return v
-            resultado = buscar_chave(v, chaves_alvo)
-            if resultado: return resultado
-    elif isinstance(dicionario, list):
-        for item in dicionario:
-            resultado = buscar_chave(item, chaves_alvo)
-            if resultado: return resultado
-    return None
-
 # =========================================================
-# EXTRAIR DADOS (BUSCA BLINDADA)
+# EXTRAIR DADOS (PISTA, HORA E CLASSE AUTOMÁTICOS)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -78,7 +64,6 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        # Pede meeting, race e form para garantir que todos os dados venham
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=meeting,race,form"
         
         headers = {
@@ -94,31 +79,45 @@ def extrair_dados(url):
 
         data = response.json()
         
-        # --- BUSCA INTELIGENTE DE METADADOS ---
-        pista = str(buscar_chave(data, ["course", "trackName", "track"]) or "Desconhecida").upper()
-        race_num = str(buscar_chave(data, ["raceNumber", "raceNo"]) or "X")
-        
-        # O horário pode estar em "time", "raceTime" ou "offTime"
-        raw_time = str(buscar_chave(data, ["time", "raceTime", "offTime"]) or "")
-        
-        hora_pista_str = "00:00"
-        hora_br_str = "00:00"
-        if raw_time:
-            match_time = re.search(r'(\d{2}:\d{2})', raw_time)
-            if match_time:
-                hora_pista_str = match_time.group(1)
-                h, m = map(int, hora_pista_str.split(':'))
-                h_br = (h - 3) % 24
-                hora_br_str = f"{h_br:02d}:{m:02d}"
+        # --- BUSCA EXATA DOS METADADOS DA CORRIDA DE HOJE ---
+        race_info = data.get("race", {})
+        if not race_info:
+            for r in data.get("meeting", {}).get("races", []):
+                if str(r.get("raceId")) == str(race_id):
+                    race_info = r
+                    break
 
+        pista = str(race_info.get("course") or race_info.get("courseName") or "Desconhecida").upper()
+        race_num = str(race_info.get("raceNumber") or race_info.get("raceNo") or "X")
+        
+        # Pega a hora EXATA da prova de hoje (evita o bug do 14:14)
+        raw_time = str(race_info.get("time") or race_info.get("raceTime") or "")
+        hora_pista = "00:00"
+        hora_br = "00:00"
+        if raw_time:
+            match_t = re.search(r'(\d{2}:\d{2})', raw_time)
+            if match_t:
+                hora_pista = match_t.group(1)
+                h, m = map(int, hora_pista.split(':'))
+                hora_br = f"{(h-3)%24:02d}:{m:02d}"
+
+        # Pega a classe da prova de hoje de forma automática
+        classe_hoje = str(race_info.get("raceClass") or race_info.get("class") or race_info.get("grade") or "").upper().strip()
+        if not classe_hoje:
+            # Se não achar direto, procura no título (ex: "A5 480m")
+            title = str(race_info.get("raceTitle", ""))
+            match_c = re.search(r'\b(A\d{1,2})\b', title)
+            classe_hoje = match_c.group(1) if match_c else "A5"
+            
         metadados = {
             "pista": pista,
-            "hora_pista": hora_pista_str,
-            "hora_br": hora_br_str,
-            "race_num": race_num
+            "hora_pista": hora_pista,
+            "hora_br": hora_br,
+            "race_num": race_num,
+            "classe": classe_hoje
         }
 
-        # Extração dos galgos
+        # --- EXTRAÇÃO DOS GALGOS ---
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
             st.warning("Nenhum dado encontrado no histórico dos galgos.")
@@ -182,7 +181,6 @@ def extrair_dados(url):
 # INTERFACE E LÓGICA DIB 2.7
 # =========================================================
 url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
-classe_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A5").upper().strip()
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
@@ -190,6 +188,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
         
         if df_bruto is not None and not df_bruto.empty and meta is not None:
             try:
+                classe_hoje = meta["classe"]
                 dist_hoje = df_bruto["Distancia"].iloc[0]
                 df = df_bruto[(df_bruto["Distancia"] == dist_hoje) & (df_bruto["CalTm"] > 0)].copy()
                 
@@ -236,7 +235,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
-                        # Categoria
+                        # Categoria (Agora usando a classe automática)
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
                         
@@ -304,7 +303,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # --- CABEÇALHO FORMATADO (COM DADOS BLINDADOS) ---
+                        # CABEÇALHO AUTOMÁTICO
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
