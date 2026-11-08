@@ -192,7 +192,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                         
                         # ==========================================
-                        # LÓGICA DE CATEGORIA COM DEBUG
+                        # LÓGICA DE CATEGORIA CORRIGIDA (DIB 2.7)
                         # ==========================================
                         cat_ult_str = group.iloc[0]["Grade"]
                         
@@ -206,10 +206,12 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         mod_cat = 0
                         
                         if "A" in cat_ult_str.upper() and match_ult:
+                            # Se o número de antes é MAIOR que o de hoje (ex: A5 -> A4), ele subiu de classe = -2
                             if nivel_ult > nivel_hoje:
-                                mod_cat = 2 # Desceu
+                                mod_cat = -2
+                            # Se o número de antes é MENOR que o de hoje (ex: A3 -> A4), ele desceu de classe = +2
                             elif nivel_ult < nivel_hoje:
-                                mod_cat = -2 # Subiu
+                                mod_cat = 2
                                 
                         cat_final = cat_base + mod_cat
 
@@ -293,7 +295,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     st.info(ranking)
 
                     st.markdown("### 📊 Planilha de Projeção")
-                    # Adicionado Base e Mod para debug visual
                     cols = ["Trap", "Galgo", "Overall", "Categoria", "Base", "Mod", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
                     st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
 
