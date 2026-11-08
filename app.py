@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (BLINDADO)
+# EXTRAIR DADOS
 # =========================================================
 def extrair_dados(url):
     try:
@@ -64,7 +64,6 @@ def extrair_dados(url):
         r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        # Requisita o card e o form
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=card,form"
         
         headers = {
@@ -79,16 +78,8 @@ def extrair_dados(url):
 
         data = response.json()
         
-        # Valores Padrão de Segurança (Caso a API mude)
-        meta = {
-            "pista": "KINSLEY", # Ou outro padrão
-            "hora_pista": "00:00",
-            "hora_br": "00:00",
-            "race_num": "X",
-            "classe": "A5"
-        }
+        meta = {"pista": "KINSLEY", "hora_pista": "00:00", "hora_br": "00:00", "race_num": "X", "classe": "A5"}
 
-        # Tenta achar os metadados
         try:
             race_info = {}
             if 'card' in data and 'races' in data['card']:
@@ -100,7 +91,6 @@ def extrair_dados(url):
             if race_info:
                 meta["pista"] = str(race_info.get("course") or race_info.get("courseName") or meta["pista"]).upper()
                 meta["race_num"] = str(race_info.get("raceNo") or race_info.get("raceNumber") or meta["race_num"])
-                
                 raw_time = str(race_info.get("time") or "")
                 if raw_time:
                     t_match = re.search(r'(\d{2}:\d{2})', raw_time)
@@ -108,17 +98,15 @@ def extrair_dados(url):
                         meta["hora_pista"] = t_match.group(1)
                         h, m = map(int, meta["hora_pista"].split(':'))
                         meta["hora_br"] = f"{(h-3)%24:02d}:{m:02d}"
-                
                 cls = str(race_info.get("raceClass") or race_info.get("grade") or meta["classe"]).upper()
                 c_match = re.search(r'A\d+', cls)
                 if c_match: meta["classe"] = c_match.group(0)
         except:
-            pass # Se falhar a extração do cabeçalho, ele segue com os padrões
+            pass
 
-        # Extrai os galgos
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            return None, None, "Nenhum dado de galgo encontrado no histórico."
+            return None, None, "Nenhum dado de galgo encontrado."
 
         registros = []
         dist_hoje_str = "480" 
@@ -128,7 +116,6 @@ def extrair_dados(url):
             nome = dog.get("dogName", "Desconhecido")
             trap = int(dog.get("trapNum", 0))
             peso_atual_card = float(dog.get("weight", 0) or 0)
-            
             forms = dog.get("forms", [])
             if not forms: continue
 
@@ -166,12 +153,65 @@ def extrair_dados(url):
                 }
                 registros.append(reg)
                 
-        if not registros:
-            return None, None, "Não foi possível processar as corridas do histórico."
-            
+        if not registros: return None, None, "Erro ao processar histórico."
         return pd.DataFrame(registros), meta, None
     except Exception as e:
         return None, None, f"Erro na extração: {str(e)}"
+
+# =========================================================
+# FUNÇÃO PARA RENDERIZAR TABELA AVB COMPARATIVA
+# =========================================================
+def render_avb_table(v, d, forca):
+    """Cria o visual de Vencedor em cima e Desafiante embaixo"""
+    cols = ["AvB", "Overall", "Cat", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca", "Força"]
+    
+    # Linha do Vencedor
+    row_v = {
+        "AvB": f"⭐ {v['Trap']} {v['Galgo']}", 
+        "Overall": round(v['Overall'], 2), 
+        "Cat": v['Cat'], 
+        "Perfil": v['Perfil'], 
+        "Histórico": v['Histórico'], 
+        "Peso": v['Peso'], 
+        "Dias": v['Dias'], 
+        "Split": round(v['Split'], 2), 
+        "Time": round(v['Time'], 2), 
+        "Time_Ajust": round(v['Time_Ajust'], 2), 
+        "M_Split": round(v['M_Split'], 2), 
+        "M_Time": round(v['M_Time'], 2), 
+        "Ritmo": round(v['Ritmo'], 2), 
+        "Recup_Str": v['Recup_Str'], 
+        "Confianca": f"{v['Confianca']}%",
+        "Força": round(forca, 2)
+    }
+    
+    # Linha do Desafiante
+    row_d = {
+        "AvB": f"   {d['Trap']} {d['Galgo']}", 
+        "Overall": round(d['Overall'], 2), 
+        "Cat": d['Cat'], 
+        "Perfil": d['Perfil'], 
+        "Histórico": d['Histórico'], 
+        "Peso": d['Peso'], 
+        "Dias": d['Dias'], 
+        "Split": round(d['Split'], 2), 
+        "Time": round(d['Time'], 2), 
+        "Time_Ajust": round(d['Time_Ajust'], 2), 
+        "M_Split": round(d['M_Split'], 2), 
+        "M_Time": round(d['M_Time'], 2), 
+        "Ritmo": round(d['Ritmo'], 2), 
+        "Recup_Str": d['Recup_Str'], 
+        "Confianca": f"{d['Confianca']}%",
+        "Força": ""
+    }
+    
+    # Linha Separadora (Traço)
+    row_sep = {c: "-" for c in cols}
+    row_sep["AvB"] = "-"
+
+    # Montando o DataFrame
+    df = pd.DataFrame([row_v, row_d, row_sep])
+    return df
 
 # =========================================================
 # INTERFACE E LÓGICA DIB 2.7
@@ -208,8 +248,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         ultima_geral = group.iloc[0]
                         
                         validas = group[group['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
-                        if validas.empty: 
-                            continue 
+                        if validas.empty: continue 
                         
                         ultima_oficial = validas.iloc[0]
                         
@@ -297,6 +336,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
+                        # CABEÇALHO
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
@@ -307,11 +347,16 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         cols_proj = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
                         
+                        # =========================================================
+                        # AVBs FORMATADAS (VENCEDOR EM CIMA)
+                        # =========================================================
                         elegiveis = agg[~agg["Block"]].reset_index(drop=True)
+                        
                         def calc_forca(v, d):
                             return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
 
                         avbs_alvo, avbs_princ, avbs_sec = [], [], []
+                        
                         for _, tgt in agg[agg["Is_Target"]].iterrows():
                             for _, atk in elegiveis[elegiveis["Overall"] > tgt["Overall"]].iterrows():
                                 f = calc_forca(atk, tgt)
@@ -327,24 +372,28 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                                     if f >= 50: avbs_princ.append((v, d, f))
                                     elif f >= 40: avbs_sec.append((v, d, f))
 
+                        # Exibição das tabelas comparativas
                         st.markdown("---")
+                        
                         st.markdown("### 🎯 Planilha de AVB do Alvo")
                         if avbs_alvo:
                             for v, d, f in avbs_alvo:
-                                star = "⭐ " if v["Galgo_Original"] in elegiveis["Galgo_Original"].head(3).values else ""
-                                st.success(f"{star}**[{v['Trap']}] {v['Galgo'].replace('[BLOQUEADO] ', '')}** vence 🎯 **[{d['Trap']}] {d['Galgo']}** (Força: {f:.2f})")
+                                df_avb = render_avb_table(v, d, f)
+                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
                         else: st.info("Nenhum confronto de Alvo gerado.")
 
                         st.markdown("### ⚔️ Planilha de AVB Principal (Elite)")
                         if avbs_princ:
                             for v, d, f in avbs_princ:
-                                st.success(f"**[{v['Trap']}] {v['Galgo']}** vence **[{d['Trap']}] {d['Galgo']}** (Força: {f:.2f})")
+                                df_avb = render_avb_table(v, d, f)
+                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
                         else: st.info("Nenhum AVB Principal gerado (Força ≥ 50.0).")
 
                         st.markdown("### 🛡️ Planilha de AVB Secundário")
                         if avbs_sec:
                             for v, d, f in avbs_sec:
-                                st.warning(f"**[{v['Trap']}] {v['Galgo']}** vence **[{d['Trap']}] {d['Galgo']}** (Força: {f:.2f})")
+                                df_avb = render_avb_table(v, d, f)
+                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
                         else: st.info("Nenhum AVB Secundário gerado (Força 40.0 a 49.9).")
 
             except Exception as e:
