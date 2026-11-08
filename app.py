@@ -4,11 +4,11 @@ import numpy as np
 import re
 import requests
 
-st.set_page_config(page_title="DIB 2.7 - Análise", layout="wide")
+st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
 st.title("🐾 Análise DIB 2.7")
 
 # =========================================================
-# 🔧 PESOS E TABELAS DO DIB 2.7 (ajuste se necessário)
+# 🔧 PESOS E TABELAS DO DIB 2.7
 # =========================================================
 PESO_AVB1 = 0.40
 PESO_AVB2 = 0.35
@@ -55,28 +55,27 @@ def zscore_invert(s):
 # =========================================================
 def extrair_dados_racingpost(url):
     try:
-        # O robô novo procura o ID e a Data em qualquer parte do link
         race_id_match = re.search(r"race_id=(\d+)", url)
         r_date_match = re.search(r"r_date=([\d-]+)", url)
 
         if not race_id_match or not r_date_match:
-            st.error("Link inválido. O link precisa ter 'race_id=123' e 'r_date=2026-11-08'.")
+            st.error("Link inválido. Precisa ter 'race_id' e 'r_date'.")
             return None
 
         race_id = race_id_match.group(1)
         r_date = r_date_match.group(1)
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date}&blocks=form"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         
-        with st.spinner("Buscando dados no Racing Post... isso pode levar alguns segundos."):
+        with st.spinner("Buscando dados no Racing Post..."):
             response = requests.get(api_url, headers=headers, timeout=15)
             response.raise_for_status()
             data = response.json()
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado de galgo encontrado para esta corrida. O site pode ter mudado o formato ou a corrida ainda não tem histórico.")
+            st.warning("Nenhum dado encontrado para esta corrida.")
             return None
 
         registros = []
@@ -88,6 +87,7 @@ def extrair_dados_racingpost(url):
                 reg = {
                     "Galgo": nome,
                     "Trap": int(trap) if str(trap).isdigit() else 0,
+                    "Distancia": corrida.get("distance", "480m"),
                     "Split": corrida.get("sectionalTime"),
                     "CalTm": corrida.get("calcRTimes"),
                     "Going": corrida.get("goingType"),
@@ -98,24 +98,23 @@ def extrair_dados_racingpost(url):
                     "Data_Corrida": corrida.get("raceTime", "")[:10],
                 }
                 registros.append(reg)
-        df = pd.DataFrame(registros)
-        return df
+        return pd.DataFrame(registros)
     except Exception as e:
-        st.error(f"Erro ao buscar dados: {e}")
+        st.error(f"Erro: {e}")
         return None
 
 # =========================================================
 # INTERFACE
 # =========================================================
 st.subheader("🔗 Cole o link da corrida do Racing Post")
-url_input = st.text_input("Exemplo: https://greyhoundbet.racingpost.com/#card/race_id=2233509&r_date=2026-11-08&tab=form")
+url_input = st.text_input("Link da corrida (Racing Post)")
 
 if st.button("Analisar Corrida"):
     if url_input:
         df = extrair_dados_racingpost(url_input)
         if df is not None and not df.empty:
-            st.success(f"✅ {len(df)} corridas extraídas com sucesso!")
             
+            # Sanitização
             for c in ["Split", "CalTm", "Peso_Atual"]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df["Going_offset"] = df["Going"].apply(parse_going)
@@ -124,93 +123,119 @@ if st.button("Analisar Corrida"):
             df["Bends_list"] = df["Bends"].apply(parse_bends)
             df["Bends_avg"] = df["Bends_list"].apply(np.mean)
             df["Bends_early"] = df["Bends_list"].apply(lambda x: x[0])
-            df["Fin"] = pd.to_numeric(df["Fin"].astype(str).str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
+            df["Fin_num"] = pd.to_numeric(df["Fin"].astype(str).str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
-            # Agregação por galgo
+            # Agregação (Médias por Galgo)
             agg = df.groupby("Galgo").agg(
+                Trap=("Trap", "last"),
+                Distancia=("Distancia", "last"),
                 Corridas=("CalTm", "count"),
                 Split_med=("Split", "mean"),
                 CalTm_med=("CalTm_adj", "mean"),
+                Going_med=("Going_offset", "mean"),
                 Bends_med=("Bends_avg", "mean"),
                 Bends_early_med=("Bends_early", "mean"),
-                Fin_med=("Fin", "mean"),
-                Remark_total=("Remark_bonus", "sum"),
+                Fin_med=("Fin_num", "mean"),
                 Peso_med=("Peso_Atual", "mean"),
                 Peso_ult=("Peso_Atual", "last"),
                 CalTm_std=("CalTm_adj", "std"),
             ).reset_index()
+            
             agg["CalTm_std"] = agg["CalTm_std"].fillna(0)
             agg["Peso_var"] = agg["Peso_ult"] - agg["Peso_med"]
 
-            # AVB
+            # Cálculo AVBs
             agg["AVB1"] = zscore_invert(agg["Split_med"]) * 0.4 + zscore_invert(agg["CalTm_med"]) * 0.6
             agg["AVB2"] = (zscore_invert(agg["Bends_early_med"]) * 0.5
                            + zscore_invert(agg["Bends_med"]) * 0.25
                            + zscore_invert(agg["Fin_med"]) * 0.25)
             agg["AVB3"] = zscore_invert(agg["CalTm_std"])
-            agg["Overall_base"] = (agg["AVB1"] * PESO_AVB1
-                                   + agg["AVB2"] * PESO_AVB2
-                                   + agg["AVB3"] * PESO_AVB3)
+            agg["Overall_base"] = (agg["AVB1"] * PESO_AVB1 + agg["AVB2"] * PESO_AVB2 + agg["AVB3"] * PESO_AVB3)
 
-            # Travas
-            df["Split_z"] = df.groupby("Galgo")["Split"].transform(
-                lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0)
-            trava_split = df.groupby("Galgo")["Split_z"].apply(
-                lambda x: (x > 1.5).sum() * -2.0).reset_index()
+            # Travas e Força
+            df["Split_z"] = df.groupby("Galgo")["Split"].transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0)
+            trava_split = df.groupby("Galgo")["Split_z"].apply(lambda x: (x > 1.5).sum() * -2.0).reset_index()
             trava_split.columns = ["Galgo", "Trava_Split"]
             trap_ult = df.sort_values("Data_Corrida").groupby("Galgo")["Trap"].last().reset_index()
             trap_ult["Trava_Trap"] = trap_ult["Trap"].map(TRAP_BONUS).fillna(0)
-            agg["Trava_Peso"] = agg["Peso_var"].apply(
-                lambda v: -PESO_TRAVA_VALOR if v < -0.5 else (PESO_TRAVA_VALOR if v > 0.5 else 0.0))
-            agg = agg.merge(trava_split, on="Galgo", how="left") \
-                     .merge(trap_ult[["Galgo", "Trava_Trap"]], on="Galgo", how="left")
-
-            # Força
-            agg["Bonus_Remarks"] = agg["Remark_total"].clip(-5, 5)
-            agg["Forca_bruta"] = (agg["Overall_base"]
-                                 + agg["Trava_Split"].fillna(0)
-                                 + agg["Trava_Trap"].fillna(0)
-                                 + agg["Trava_Peso"].fillna(0)
-                                 + agg["Bonus_Remarks"])
+            agg["Trava_Peso"] = agg["Peso_var"].apply(lambda v: -PESO_TRAVA_VALOR if v < -0.5 else (PESO_TRAVA_VALOR if v > 0.5 else 0.0))
+            
+            agg = agg.merge(trava_split, on="Galgo", how="left").merge(trap_ult[["Galgo", "Trava_Trap"]], on="Galgo", how="left")
+            
+            agg["Bonus_Remarks"] = agg["Remark_total"] = df.groupby("Galgo")["Remark_bonus"].sum().values
+            agg["Forca_bruta"] = (agg["Overall_base"] + agg["Trava_Split"].fillna(0) + agg["Trava_Trap"].fillna(0) + agg["Trava_Peso"].fillna(0) + agg["Bonus_Remarks"].clip(-5, 5))
+            
             fmin, fmax = agg["Forca_bruta"].min(), agg["Forca_bruta"].max()
-            agg["Forca"] = ((agg["Forca_bruta"] - fmin) / (fmax - fmin) * 100 if fmax > fmin else 50.0)
-            agg = agg.sort_values("Forca", ascending=False).reset_index(drop=True)
-            agg["Ranking"] = agg.index + 1
+            agg["Força"] = ((agg["Forca_bruta"] - fmin) / (fmax - fmin) * 100 if fmax > fmin else 50.0)
+            
+            agg = agg.sort_values("Força", ascending=False).reset_index(drop=True)
+            agg.insert(0, "Rank", agg.index + 1)
 
-            # Exibição
-            t1, t2, t3, t4 = st.tabs(["🏆 Ranking / Força", "📊 AVB (3 tabelas)",
-                                      "⚔️ Matchmaking", "📄 Dados processados"])
-            with t1:
-                st.subheader("Ranking por Força")
-                st.dataframe(agg[["Ranking", "Galgo", "Forca", "Overall_base", "Corridas",
-                                  "Split_med", "CalTm_med", "Fin_med"]].round(2),
-                             use_container_width=True)
-            with t2:
-                st.subheader("AVB 1 — Velocidade")
-                st.dataframe(agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].round(2),
-                             use_container_width=True)
-                st.subheader("AVB 2 — Posicionamento")
-                st.dataframe(agg[["Galgo", "AVB2", "Bends_early_med", "Bends_med", "Fin_med"]].round(2),
-                             use_container_width=True)
-                st.subheader("AVB 3 — Consistência")
-                st.dataframe(agg[["Galgo", "AVB3", "CalTm_std"]].round(2),
-                             use_container_width=True)
-            with t3:
-                st.subheader("Confrontos sugeridos")
+            # =========================================================
+            # EXIBIÇÃO - ABAS
+            # =========================================================
+            tab_proj, tab_avb1, tab_avb2, tab_avb3, tab_match, tab_dados = st.tabs([
+                "📋 Planilha de Projeção", "📊 AVB 1 (Velocidade)", "📊 AVB 2 (Posição)", 
+                "📊 AVB 3 (Consistência)", "⚔️ Matchmaking", "📄 Dados Brutos"
+            ])
+
+            with tab_proj:
+                st.subheader("Planilha de Projeção (12 Colunas)")
+                # Construindo as 12 colunas exatas
+                proj = pd.DataFrame({
+                    "Rank": agg["Rank"],
+                    "Galgo": agg["Galgo"],
+                    "Trap": agg["Trap"],
+                    "Dist.": agg["Distancia"],
+                    "Split": agg["Split_med"].round(2),
+                    "CalTm": agg["CalTm_med"].round(2),
+                    "Going": agg["Going_med"].round(2),
+                    "Bends": agg["Bends_med"].round(1),
+                    "Fin": agg["Fin_med"].round(1),
+                    "AVB1": agg["AVB1"].round(1),
+                    "AVB2": agg["AVB2"].round(1),
+                    "Força": agg["Força"].round(1)
+                })
+                st.dataframe(proj, use_container_width=True, hide_index=True)
+
+            with tab_avb1:
+                st.subheader("AVB 1 — Comparativo de Velocidade (Split + CalTm)")
+                media_avb1 = agg["AVB1"].mean()
+                df_avb1 = agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].copy()
+                df_avb1["Diferença p/ Média"] = (df_avb1["AVB1"] - media_avb1).round(1)
+                st.dataframe(df_avb1.sort_values("AVB1", ascending=False).round(2), use_container_width=True, hide_index=True)
+
+            with tab_avb2:
+                st.subheader("AVB 2 — Comparativo de Posicionamento (Bends + Fin)")
+                media_avb2 = agg["AVB2"].mean()
+                df_avb2 = agg[["Galgo", "AVB2", "Bends_early_med", "Fin_med"]].copy()
+                df_avb2["Diferença p/ Média"] = (df_avb2["AVB2"] - media_avb2).round(1)
+                st.dataframe(df_avb2.sort_values("AVB2", ascending=False).round(2), use_container_width=True, hide_index=True)
+
+            with tab_avb3:
+                st.subheader("AVB 3 — Comparativo de Consistência")
+                media_avb3 = agg["AVB3"].mean()
+                df_avb3 = agg[["Galgo", "AVB3", "CalTm_std"]].copy()
+                df_avb3["Diferença p/ Média"] = (df_avb3["AVB3"] - media_avb3).round(1)
+                st.dataframe(df_avb3.sort_values("AVB3", ascending=False).round(2), use_container_width=True, hide_index=True)
+
+            with tab_match:
+                st.subheader("Confrontos Sugeridos")
                 pares = []
                 for i in range(0, len(agg) - 1, 2):
                     a, b = agg.iloc[i], agg.iloc[i + 1]
-                    dif = a["Forca"] - b["Forca"]
+                    dif = a["Força"] - b["Força"]
                     pares.append({
-                        "Confronto": f"{a['Galgo']} vs {b['Galgo']}",
-                        "Força A": round(a["Forca"], 1),
-                        "Força B": round(b["Forca"], 1),
+                        "Confronto": f"{a['Galgo']} (Trap {a['Trap']}) vs {b['Galgo']} (Trap {b['Trap']})",
+                        "Força A": round(a["Força"], 1),
+                        "Força B": round(b["Força"], 1),
                         "Favorito": a["Galgo"] if dif >= 0 else b["Galgo"],
                         "Margem": round(abs(dif), 1),
                     })
-                st.dataframe(pd.DataFrame(pares), use_container_width=True)
-            with t4:
+                st.dataframe(pd.DataFrame(pares), use_container_width=True, hide_index=True)
+
+            with tab_dados:
                 st.dataframe(df.drop(columns=["Bends_list"]), use_container_width=True)
 
     else:
-        st.warning("Cole um link válido do Racing Post.")
+        st.warning("Cole um link válido.")
