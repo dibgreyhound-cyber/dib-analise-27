@@ -159,12 +159,21 @@ def extrair_dados(url):
         return None, None, f"Erro na extração: {str(e)}"
 
 # =========================================================
-# FUNÇÃO PARA RENDERIZAR TABELA AVB COMPARATIVA
+# FUNÇÃO PARA RENDERIZAR TABELA AVB COM DIFERENÇA
 # =========================================================
 def render_avb_table(v, d, forca):
-    """Cria o visual de Vencedor em cima e Desafiante embaixo"""
     cols = ["AvB", "Overall", "Cat", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca", "Força"]
     
+    # Função para calcular a diferença e formatar
+    def fmt_diff(val_d, val_v, is_int=False):
+        try:
+            diff = float(val_d) - float(val_v)
+            if is_int:
+                return f"{int(val_d)} ({int(diff):+d})"
+            return f"{float(val_d):.2f} ({diff:+.2f})"
+        except:
+            return str(val_d)
+
     # Linha do Vencedor
     row_v = {
         "AvB": f"⭐ {v['Trap']} {v['Galgo']}", 
@@ -185,23 +194,23 @@ def render_avb_table(v, d, forca):
         "Força": round(forca, 2)
     }
     
-    # Linha do Desafiante
+    # Linha do Desafiante (com a diferença)
     row_d = {
         "AvB": f"   {d['Trap']} {d['Galgo']}", 
-        "Overall": round(d['Overall'], 2), 
-        "Cat": d['Cat'], 
+        "Overall": fmt_diff(d['Overall'], v['Overall']), 
+        "Cat": fmt_diff(d['Cat'], v['Cat'], is_int=True), 
         "Perfil": d['Perfil'], 
         "Histórico": d['Histórico'], 
-        "Peso": d['Peso'], 
-        "Dias": d['Dias'], 
-        "Split": round(d['Split'], 2), 
-        "Time": round(d['Time'], 2), 
-        "Time_Ajust": round(d['Time_Ajust'], 2), 
-        "M_Split": round(d['M_Split'], 2), 
-        "M_Time": round(d['M_Time'], 2), 
-        "Ritmo": round(d['Ritmo'], 2), 
-        "Recup_Str": d['Recup_Str'], 
-        "Confianca": f"{d['Confianca']}%",
+        "Peso": fmt_diff(d['Peso'], v['Peso']), 
+        "Dias": fmt_diff(d['Dias'], v['Dias'], is_int=True), 
+        "Split": fmt_diff(d['Split'], v['Split']), 
+        "Time": fmt_diff(d['Time'], v['Time']), 
+        "Time_Ajust": fmt_diff(d['Time_Ajust'], v['Time_Ajust']), 
+        "M_Split": fmt_diff(d['M_Split'], v['M_Split']), 
+        "M_Time": fmt_diff(d['M_Time'], v['M_Time']), 
+        "Ritmo": fmt_diff(d['Ritmo'], v['Ritmo']), 
+        "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", 
+        "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)",
         "Força": ""
     }
     
@@ -336,7 +345,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         top3_splits = agg["M_Split"].nsmallest(3).tolist()
                         agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                         
-                        # CABEÇALHO
                         header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
                         st.markdown(header)
 
@@ -347,11 +355,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         cols_proj = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                         st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
                         
-                        # =========================================================
-                        # AVBs FORMATADAS (VENCEDOR EM CIMA)
-                        # =========================================================
                         elegiveis = agg[~agg["Block"]].reset_index(drop=True)
-                        
                         def calc_forca(v, d):
                             return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
 
@@ -394,7 +398,4 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             for v, d, f in avbs_sec:
                                 df_avb = render_avb_table(v, d, f)
                                 st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: st.info("Nenhum AVB Secundário gerado (Força 40.0 a 49.9).")
-
-            except Exception as e:
-                st.error(f"Erro no processamento: {e}")
+                        else: st.info("Nenhum AVB Secundário gerado (F
