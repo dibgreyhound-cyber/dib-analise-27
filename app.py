@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 import requests
+from datetime import datetime
 
 st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
 st.title("🐾 Análise DIB 2.7")
@@ -48,7 +49,7 @@ def zscore_invert(s):
     return (-z) * 15 + 50
 
 # =========================================================
-# EXTRAIR DADOS DO RACING POST (COM CABEÇALHOS CORRIGIDOS)
+# EXTRAIR DADOS DO RACING POST
 # =========================================================
 def extrair_dados_racingpost(url):
     try:
@@ -60,17 +61,16 @@ def extrair_dados_racingpost(url):
             return None
 
         race_id = race_id_match.group(1)
-        r_date = r_date_match.group(1)
+        r_date_str = r_date_match.group(1)
+        r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date}&blocks=form"
+        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
         
-        # AQUI ESTÁ A CORREÇÃO DO ERRO 406
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://greyhoundbet.racingpost.com/",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+            "Referer": "https://greyhoundbet.racingpost.com/"
         }
         
         with st.spinner("Buscando dados no Racing Post..."):
@@ -88,17 +88,27 @@ def extrair_dados_racingpost(url):
             nome = dog.get("dogName", "Desconhecido")
             trap = dog.get("trapNum", "0")
             peso = dog.get("weight", "0")
-            for corrida in dog.get("forms", []):
-                track = corrida.get("trackName", "N/A")
-                data_corrida = corrida.get("raceTime", "N/A")[:10]
-                
+            
+            forms = dog.get("forms", [])
+            if not forms:
+                continue
+
+            # Pega a corrida mais recente para as colunas "atuais"
+            ultima_corrida = forms[0]
+            
+            # Calcula dias sem correr
+            data_ultima = datetime.strptime(ultima_corrida.get("raceTime", r_date_str)[:10], "%Y-%m-%d")
+            dias_sem_correr = (r_date_obj - data_ultima).days
+
+            # Histórico (Vitórias / Corridas)
+            vitorias = sum(1 for c in forms if str(c.get("outcomeDesc", "")).strip() == "1")
+            historico = f"{vitorias}/{len(forms)}"
+
+            for corrida in forms:
                 reg = {
                     "Galgo": nome,
                     "Trap_Num": int(trap) if str(trap).isdigit() else 0,
                     "Trap": f"[{trap}]",
-                    "Track": track,
-                    "Data": data_corrida,
-                    "Dist": corrida.get("distance", "480m"),
                     "Split": corrida.get("sectionalTime"),
                     "CalTm": corrida.get("calcRTimes"),
                     "Going": corrida.get("goingType"),
@@ -106,6 +116,9 @@ def extrair_dados_racingpost(url):
                     "Fin": corrida.get("outcomeDesc"),
                     "Remarks": corrida.get("closeUpCmnt", ""),
                     "Peso_Atual": peso,
+                    "Dias_Sem_Correr": dias_sem_correr,
+                    "Historico": historico,
+                    "Data_Corrida": corrida.get("raceTime", "")[:10],
                 }
                 registros.append(reg)
         return pd.DataFrame(registros)
@@ -117,7 +130,7 @@ def extrair_dados_racingpost(url):
 # INTERFACE
 # =========================================================
 st.subheader("🔗 Cole o link da corrida do Racing Post")
-url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
+url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
 
 if st.button("Analisar Corrida", type="primary"):
     if url_input:
@@ -126,6 +139,7 @@ if st.button("Analisar Corrida", type="primary"):
             
             for c in ["Split", "CalTm", "Peso_Atual"]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
+            
             df["Going_offset"] = df["Going"].apply(parse_going)
             df["CalTm_adj"] = df["CalTm"] - df["Going_offset"]
             df["Remark_bonus"] = df["Remarks"].apply(parse_remarks)
@@ -134,89 +148,122 @@ if st.button("Analisar Corrida", type="primary"):
             df["Bends_early"] = df["Bends_list"].apply(lambda x: x[0])
             df["Fin_num"] = pd.to_numeric(df["Fin"].astype(str).str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
 
+            # Agregação (Médias por Galgo)
             agg = df.groupby("Galgo").agg(
+                Trap_Num=("Trap_Num", "last"),
                 Trap=("Trap", "last"),
-                Track=("Track", "last"),
-                Data=("Data", "last"),
-                Dist=("Dist", "last"),
                 Split_med=("Split", "mean"),
                 CalTm_med=("CalTm_adj", "mean"),
-                Going_med=("Going_offset", "mean"),
                 Bends_med=("Bends_avg", "mean"),
                 Bends_early_med=("Bends_early", "mean"),
                 Fin_med=("Fin_num", "mean"),
                 Remark_total=("Remark_bonus", "sum"),
-                Peso_med=("Peso_Atual", "mean"),
                 Peso_ult=("Peso_Atual", "last"),
                 CalTm_std=("CalTm_adj", "std"),
+                Dias_Sem_Correr=("Dias_Sem_Correr", "last"),
+                Historico=("Historico", "last"),
+                Split_ult=("Split", "last"),
+                CalTm_ult=("CalTm_adj", "last")
             ).reset_index()
             
             agg["CalTm_std"] = agg["CalTm_std"].fillna(0)
-            agg["Peso_var"] = agg["Peso_ult"] - agg["Peso_med"]
 
+            # AVBs
             agg["AVB1"] = zscore_invert(agg["Split_med"]) * 0.4 + zscore_invert(agg["CalTm_med"]) * 0.6
             agg["AVB2"] = (zscore_invert(agg["Bends_early_med"]) * 0.5 + zscore_invert(agg["Bends_med"]) * 0.25 + zscore_invert(agg["Fin_med"]) * 0.25)
             agg["AVB3"] = zscore_invert(agg["CalTm_std"])
             agg["Overall_base"] = (agg["AVB1"] * PESO_AVB1 + agg["AVB2"] * PESO_AVB2 + agg["AVB3"] * PESO_AVB3)
 
+            # Travas
             df["Split_z"] = df.groupby("Galgo")["Split"].transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0)
             trava_split = df.groupby("Galgo")["Split_z"].apply(lambda x: (x > 1.5).sum() * -2.0).reset_index()
             trava_split.columns = ["Galgo", "Trava_Split"]
             
-            trap_ult = df.sort_values("Data").groupby("Galgo")["Trap_Num"].last().reset_index()
+            trap_ult = df.sort_values("Data_Corrida").groupby("Galgo")["Trap_Num"].last().reset_index()
             trap_ult["Trava_Trap"] = trap_ult["Trap_Num"].map(TRAP_BONUS).fillna(0)
-            
-            agg["Trava_Peso"] = agg["Peso_var"].apply(lambda v: -PESO_TRAVA_VALOR if v < -0.5 else (PESO_TRAVA_VALOR if v > 0.5 else 0.0))
             
             agg = agg.merge(trava_split, on="Galgo", how="left").merge(trap_ult[["Galgo", "Trava_Trap"]], on="Galgo", how="left")
             
             agg["Bonus_Remarks"] = agg["Remark_total"].clip(-5, 5)
-            agg["Forca_bruta"] = (agg["Overall_base"] + agg["Trava_Split"].fillna(0) + agg["Trava_Trap"].fillna(0) + agg["Trava_Peso"].fillna(0) + agg["Bonus_Remarks"])
+            agg["Forca_bruta"] = (agg["Overall_base"] + agg["Trava_Split"].fillna(0) + agg["Trava_Trap"].fillna(0) + agg["Bonus_Remarks"])
             
             fmin, fmax = agg["Forca_bruta"].min(), agg["Forca_bruta"].max()
             agg["Força"] = ((agg["Forca_bruta"] - fmin) / (fmax - fmin) * 100 if fmax > fmin else 50.0)
-            
-            agg = agg.sort_values("Força", ascending=False).reset_index(drop=True)
-            agg.insert(0, "Rank", agg.index + 1)
 
+            # Criando as colunas solicitadas para a Planilha de Projeção (17 colunas)
+            # 1. Trap, 2. Galgo, 3. Overall, 4. Categoria, 5. Fatores, 6. Perfil, 7. Histórico, 8. Peso, 
+            # 9. Dias sem correr, 10. Split, 11. Time, 12. Time ajustado, 13. Média Split, 14. Média Time, 
+            # 15. Ritmo final, 16. Recuperação média, 17. Confiança
+            
+            def get_categoria(overall):
+                if overall > 65: return "A1"
+                elif overall > 55: return "A2"
+                elif overall > 45: return "A3"
+                else: return "A4"
+
+            def get_fatores(row):
+                max_avb = max(row["AVB1"], row["AVB2"], row["AVB3"])
+                if max_avb == row["AVB1"]: return "Velocidade"
+                elif max_avb == row["AVB2"]: return "Posição"
+                else: return "Consistência"
+
+            def get_perfil(bends):
+                if bends <= 2.0: return "Frente"
+                elif bends <= 4.0: return "Meio"
+                else: return "Atrás"
+
+            proj = pd.DataFrame({
+                "Trap": agg["Trap"],
+                "Galgo": agg["Galgo"],
+                "Overall": agg["Overall_base"].round(1),
+                "Categoria": agg["Overall_base"].apply(get_categoria),
+                "Fatores": agg.apply(get_fatores, axis=1),
+                "Perfil": agg["Bends_early_med"].apply(get_perfil),
+                "Histórico": agg["Historico"],
+                "Peso": agg["Peso_ult"],
+                "Dias s/ Correr": agg["Dias_Sem_Correr"],
+                "Split": agg["Split_ult"].round(2),
+                "Time": agg["CalTm_ult"].round(2),
+                "Time Ajust.": agg["CalTm_med"].round(2),
+                "Média Split": agg["Split_med"].round(2),
+                "Média Time": agg["CalTm_med"].round(2),
+                "Ritmo Final": agg["Fin_med"].round(1),
+                "Recuperação": (agg["Bends_med"] - agg["Fin_med"]).round(1),
+                "Confiança": (100 - (agg["CalTm_std"] * 100).clip(0, 100)).round(1)
+            })
+
+            # Ordenar a Projeção pelo Trap (Ordem Numérica, como você pediu)
+            proj = proj.sort_values("Trap", key=lambda x: x.str.extract(r'(\d+)')[0].astype(int))
+
+            # Exibição
             tab_proj, tab_avb, tab_match, tab_dados = st.tabs([
-                "📋 Planilha de Projeção", "📊 Tabelas AVB", "⚔️ Matchmaking", "📄 Dados Brutos"
+                "📋 Projeção (17 Colunas)", "📊 Tabelas AVB", "⚔️ Matchmaking", "📄 Dados Brutos"
             ])
 
             with tab_proj:
                 st.subheader("Planilha de Projeção")
-                proj = pd.DataFrame({
-                    "Rank": agg["Rank"],
-                    "Trp": agg["Trap"],
-                    "Galgo": agg["Galgo"],
-                    "Data": agg["Data"],
-                    "Track": agg["Track"],
-                    "Dist.": agg["Dist"],
-                    "Split": agg["Split_med"].round(2),
-                    "CalTm": agg["CalTm_med"].round(2),
-                    "Bends": agg["Bends_med"].round(1),
-                    "Fin": agg["Fin_med"].round(1),
-                    "AVB1": agg["AVB1"].round(1),
-                    "AVB2": agg["AVB2"].round(1),
-                    "Força": agg["Força"].round(1)
-                })
                 st.dataframe(proj, use_container_width=True, hide_index=True)
 
             with tab_avb:
-                st.subheader("Comparativo AVB 1 (Velocidade)")
-                st.dataframe(agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].sort_values("AVB1", ascending=False).round(2), use_container_width=True, hide_index=True)
+                st.subheader("AVB 1 — Velocidade")
+                avb1_df = agg[["Galgo", "AVB1", "Split_med", "CalTm_med"]].sort_values("AVB1", ascending=False).rename(columns={"Split_med": "Split Médio", "CalTm_med": "Time Médio"})
+                st.dataframe(avb1_df.round(2), use_container_width=True, hide_index=True)
                 
-                st.subheader("Comparativo AVB 2 (Posicionamento)")
-                st.dataframe(agg[["Galgo", "AVB2", "Bends_early_med", "Fin_med"]].sort_values("AVB2", ascending=False).round(2), use_container_width=True, hide_index=True)
+                st.subheader("AVB 2 — Posicionamento")
+                avb2_df = agg[["Galgo", "AVB2", "Bends_early_med", "Fin_med"]].sort_values("AVB2", ascending=False).rename(columns={"Bends_early_med": "Bends Início", "Fin_med": "Final Médio"})
+                st.dataframe(avb2_df.round(2), use_container_width=True, hide_index=True)
                 
-                st.subheader("Comparativo AVB 3 (Consistência)")
-                st.dataframe(agg[["Galgo", "AVB3", "CalTm_std"]].sort_values("AVB3", ascending=False).round(2), use_container_width=True, hide_index=True)
+                st.subheader("AVB 3 — Consistência")
+                avb3_df = agg[["Galgo", "AVB3", "CalTm_std"]].sort_values("AVB3", ascending=False).rename(columns={"CalTm_std": "Variação de Tempo"})
+                st.dataframe(avb3_df.round(2), use_container_width=True, hide_index=True)
 
             with tab_match:
                 st.subheader("Confrontos Sugeridos")
+                # Ordenar por força para o matchmaking fazer sentido
+                agg_forca = agg.sort_values("Força", ascending=False).reset_index(drop=True)
                 pares = []
-                for i in range(0, len(agg) - 1, 2):
-                    a, b = agg.iloc[i], agg.iloc[i + 1]
+                for i in range(0, len(agg_forca) - 1, 2):
+                    a, b = agg_forca.iloc[i], agg_forca.iloc[i + 1]
                     dif = a["Força"] - b["Força"]
                     pares.append({
                         "Confronto": f"{a['Trap']} {a['Galgo']} vs {b['Trap']} {b['Galgo']}",
