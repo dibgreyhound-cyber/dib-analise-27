@@ -106,7 +106,7 @@ def extrair_dados_racingpost(url):
             dias_sem_correr = (r_date_obj - data_ultima).days
 
             for corrida in forms:
-                grade_corrida = "A6" # Padrão
+                grade_corrida = "A6"
                 for key in ["grade", "gr", "raceGrade", "grde", "class", "cls", "raceClass"]:
                     if key in corrida and corrida[key]:
                         grade_corrida = str(corrida[key]).upper().strip()
@@ -146,7 +146,7 @@ def extrair_dados_racingpost(url):
 # INTERFACE E LÓGICA DIB 2.7
 # =========================================================
 url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
-class_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A4").upper()
+class_hoje = st.text_input("Classe da Corrida Hoje (ex: A4, A5, A6)", value="A4").upper().strip()
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
@@ -192,11 +192,10 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                         
                         # ==========================================
-                        # CORREÇÃO DA LÓGICA DE CATEGORIA (DIB 2.7)
+                        # LÓGICA DE CATEGORIA COM DEBUG
                         # ==========================================
                         cat_ult_str = group.iloc[0]["Grade"]
                         
-                        # Extrai o número da classe hoje e da última
                         match_hoje = re.search(r'A(\d+)', class_hoje)
                         match_ult = re.search(r'A(\d+)', cat_ult_str)
                         
@@ -204,19 +203,15 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         nivel_ult = int(match_ult.group(1)) if match_ult else 6
                         
                         cat_base = get_cat_base(class_hoje)
+                        mod_cat = 0
                         
-                        # Se o nivel anterior for MAIOR que o de hoje, ele desceu (ex: 5 -> 4)
-                        if nivel_ult > nivel_hoje:
-                            cat_final = cat_base + 2
-                        # Se o nivel anterior for MENOR que o de hoje, ele subiu (ex: 4 -> 5)
-                        elif nivel_ult < nivel_hoje:
-                            cat_final = cat_base - 2
-                        else:
-                            cat_final = cat_base
-                            
-                        # Se a última corrida não foi classe A (ex: D3), zera o bônus/penalidade
-                        if "A" not in cat_ult_str.upper():
-                            cat_final = cat_base
+                        if "A" in cat_ult_str.upper() and match_ult:
+                            if nivel_ult > nivel_hoje:
+                                mod_cat = 2 # Desceu
+                            elif nivel_ult < nivel_hoje:
+                                mod_cat = -2 # Subiu
+                                
+                        cat_final = cat_base + mod_cat
 
                         confianca = len(group) * 20
                         is_trial = str(group.iloc[0]["Grade"]).startswith("T")
@@ -225,6 +220,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             "Trap": group.iloc[0]["Trap_Num"],
                             "Galgo": nome,
                             "Categoria": cat_final,
+                            "Base": cat_base,
+                            "Mod": mod_cat,
                             "Media Time": m_time,
                             "Media Split": m_split,
                             "Time Ajustado": m_ajust,
@@ -296,7 +293,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     st.info(ranking)
 
                     st.markdown("### 📊 Planilha de Projeção")
-                    cols = ["Trap", "Galgo", "Overall", "Categoria", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
+                    # Adicionado Base e Mod para debug visual
+                    cols = ["Trap", "Galgo", "Overall", "Categoria", "Base", "Mod", "Perfil", "Grade", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
                     st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
 
                     st.markdown("### 🎯 Planilha de AVB do Alvo")
