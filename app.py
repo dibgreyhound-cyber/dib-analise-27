@@ -101,7 +101,6 @@ def extrair_dados_racingpost(url):
 
             data_ultima = datetime.strptime(forms[0].get("raceTime", r_date_str)[:10], "%Y-%m-%d")
             dias_sem_correr = (r_date_obj - data_ultima).days
-            class_hoje = forms[0].get("grade", "A6")
 
             for corrida in forms:
                 reg = {
@@ -116,8 +115,7 @@ def extrair_dados_racingpost(url):
                     "Peso_Atual": peso, 
                     "Dias_Sem_Correr": dias_sem_correr,
                     "Grade": corrida.get("grade", "A6"),
-                    "Data_Corrida": corrida.get("raceTime", "")[:10],
-                    "Class_Hoje": class_hoje
+                    "Data_Corrida": corrida.get("raceTime", "")[:10]
                 }
                 registros.append(reg)
         
@@ -135,6 +133,9 @@ def extrair_dados_racingpost(url):
 # INTERFACE E LÓGICA DIB 2.7
 # =========================================================
 url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
+
+# NOVO CAMPO: Classe da corrida
+class_hoje = st.text_input("Classe da Corrida (ex: A4, A5, A6)", value="A4").upper()
 
 if st.button("Analisar Corrida", type="primary") and url_input:
     with st.spinner("Processando DIB 2.7..."):
@@ -182,8 +183,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         else:
                             recup_med = 0.0
                         
-                        # Categoria
-                        class_hoje = group.iloc[0]["Class_Hoje"]
+                        # Categoria (Usando a classe inserida pelo usuário)
                         cat_ult = group.iloc[0]["Grade"]
                         nivel_hoje = int(re.search(r'\d+', class_hoje).group()) if re.search(r'\d+', class_hoje) else 6
                         nivel_ult = int(re.search(r'\d+', cat_ult).group()) if re.search(r'\d+', cat_ult) else 6
@@ -272,7 +272,8 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     st.info(ranking)
 
                     st.markdown("### 📊 Planilha de Projeção")
-                    cols = ["Trap", "Galgo", "Overall", "Categoria", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
+                    # CORREÇÃO: Adicionado "Time" na lista de colunas
+                    cols = ["Trap", "Galgo", "Overall", "Categoria", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time Ajustado", "Media Time", "Recup. Média", "Confiança"]
                     st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
 
                     st.markdown("### 🎯 Planilha de AVB do Alvo")
