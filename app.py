@@ -3,16 +3,13 @@ import pandas as pd
 import numpy as np
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 
-st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
+st.set_page_config(page_title="DIB 2.7", layout="wide")
 st.title("🐾 Análise DIB 2.7")
 
-# =========================================================
-# 🔧 FUNÇÕES AUXILIARES E CÁLCULOS
-# =========================================================
 def parse_going(g):
-    if pd.isna(g) or g is None: return 0.0
+    if pd.isna(g): return 0.0
     g = str(g).strip().upper().replace(" ", "")
     if g in ["N", "NORMAL"]: return 0.0
     m = re.match(r"([+-]?)(\d+)", g)
@@ -20,384 +17,180 @@ def parse_going(g):
     val = int(m.group(2)) / 100.0
     return -val if m.group(1) == "-" else val
 
-def parse_traffic(remarks):
-    if pd.isna(remarks): return 0.0
-    r = str(remarks).upper()
+def parse_traffic(r):
+    if pd.isna(r): return 0.0
+    r = str(r).upper()
     if "BAULKED" in r or "BLK" in r: return 0.20
     if "CRD" in r or "BMP" in r or "FCD" in r: return 0.10
     return 0.0
 
-def is_traffic(remarks):
-    if pd.isna(remarks): return False
-    r = str(remarks).upper()
+def is_traffic(r):
+    if pd.isna(r): return False
+    r = str(r).upper()
     return any(x in r for x in ["CRD", "BMP", "BLK", "BAULKED", "FCD", "MVDOFF", "EVCH"])
 
-def get_bends(b_str):
-    if pd.isna(b_str): return 4, 4
-    digits = [int(c) for c in str(b_str) if c.isdigit()]
-    if len(digits) >= 4: return digits[0], digits[-1]
-    return 4, 4
+def get_bends(b):
+    if pd.isna(b): return 4, 4
+    d = [int(c) for c in str(b) if c.isdigit()]
+    return (d[0], d[-1]) if len(d) >= 4 else (4, 4)
 
-def get_cat_base(grade_str):
-    mapping = {"A1": 15, "A2": 14, "A3": 13, "A4": 12, "A5": 11, "A6": 10, "A7": 9, "A8": 8, "A9": 7, "A10": 6, "A11": 5}
-    match = re.search(r'A(\d+)', str(grade_str).upper())
-    if match:
-        return mapping.get(f"A{match.group(1)}", 10)
-    return 10
+def get_cat(g):
+    m = {"A1": 15, "A2": 14, "A3": 13, "A4": 12, "A5": 11, "A6": 10, "A7": 9, "A8": 8, "A9": 7, "A10": 6, "A11": 5}
+    match = re.search(r'A(\d+)', str(g).upper())
+    return m.get(f"A{match.group(1)}", 10) if match else 10
 
-def calc_prop_points(series, max_pts, min_pts):
-    s = pd.to_numeric(series, errors="coerce").fillna(series.median())
-    if s.max() == s.min(): return pd.Series([(max_pts+min_pts)/2] * len(s), index=s.index)
-    min_val, max_val = s.min(), s.max()
-    return max_pts - ((s - min_val) / (max_val - min_val) * (max_pts - min_pts))
+def calc_prop(s, max_p, min_p):
+    s = pd.to_numeric(s, errors="coerce").fillna(s.median())
+    if s.max() == s.min(): return pd.Series([(max_p+min_p)/2] * len(s), index=s.index)
+    return max_p - ((s - s.min()) / (s.max() - s.min()) * (max_p - min_p))
 
-def get_trap_emoji(trap_num):
-    trap_map = {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}
-    return trap_map.get(int(trap_num), str(trap_num))
+def get_emoji(t):
+    return {1: "🟥 1", 2: "🟦 2", 3: "⬜ 3", 4: "⬛ 4", 5: "🟧 5", 6: "🔳 6"}.get(int(t), str(t))
 
-# =========================================================
-# EXTRAIR DADOS
-# =========================================================
-def extrair_dados(url):
+def extrair(url):
     try:
-        race_id = re.search(r"race_id=(\d+)", url).group(1)
-        r_date_str = re.search(r"r_date=([\d-]+)", url).group(1)
-        r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
-
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=card,form"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://greyhoundbet.racingpost.com/"
-        }
-        
-        response = requests.get(api_url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return None, None, f"Bloqueio do Racing Post (Código {response.status_code})."
-
-        data = response.json()
-        
-        meta = {"pista": "KINSLEY", "hora_pista": "00:00", "hora_br": "00:00", "race_num": "X", "classe": "A5"}
-
+        rid = re.search(r"race_id=(\d+)", url).group(1)
+        dt = re.search(r"r_date=([\d-]+)", url).group(1)
+        d_obj = datetime.strptime(dt, "%Y-%m-%d")
+        api = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={rid}&r_date={dt}&blocks=card,form"
+        h = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+        res = requests.get(api, headers=h, timeout=15)
+        if res.status_code != 200: return None, None, "Bloqueio."
+        data = res.json()
+        meta = {"pista": "KINSLEY", "hora": "00:00", "br": "00:00", "num": "X", "cat": "A5"}
         try:
-            race_info = {}
-            if 'card' in data and 'races' in data['card']:
-                for r in data['card']['races']:
-                    if str(r.get('raceId')) == str(race_id):
-                        race_info = r
-                        break
-            
-            if race_info:
-                meta["pista"] = str(race_info.get("course") or race_info.get("courseName") or meta["pista"]).upper()
-                meta["race_num"] = str(race_info.get("raceNo") or race_info.get("raceNumber") or meta["race_num"])
-                raw_time = str(race_info.get("time") or "")
-                if raw_time:
-                    t_match = re.search(r'(\d{2}:\d{2})', raw_time)
-                    if t_match:
-                        meta["hora_pista"] = t_match.group(1)
-                        h, m = map(int, meta["hora_pista"].split(':'))
-                        meta["hora_br"] = f"{(h-3)%24:02d}:{m:02d}"
-                cls = str(race_info.get("raceClass") or race_info.get("grade") or meta["classe"]).upper()
-                c_match = re.search(r'A\d+', cls)
-                if c_match: meta["classe"] = c_match.group(0)
-        except:
-            pass
-
+            for r in data.get('card', {}).get('races', []):
+                if str(r.get('raceId')) == str(rid):
+                    meta["pista"] = str(r.get("course", meta["pista"])).upper()
+                    meta["num"] = str(r.get("raceNo", meta["num"]))
+                    tm = str(r.get("time", ""))
+                    if tm:
+                        match = re.search(r'(\d{2}:\d{2})', tm)
+                        if match:
+                            meta["hora"] = match.group(1)
+                            meta["br"] = f"{(int(meta['hora'][:2])-3)%24:02d}:{meta['hora'][3:]}"
+                    cls = str(r.get("raceClass", meta["cat"])).upper()
+                    c_match = re.search(r'A\d+', cls)
+                    if c_match: meta["cat"] = c_match.group(0)
+                    break
+        except: pass
         dogs = data.get("form", {}).get("dogs", [])
-        if not dogs:
-            return None, None, "Nenhum dado de galgo encontrado."
-
-        registros = []
-        dist_hoje_str = "480" 
-        total_caes = len(dogs)
-        
+        if not dogs: return None, None, "Sem galgos."
+        regs, dist = [], "480"
+        total = len(dogs)
         for dog in dogs:
-            nome = dog.get("dogName", "Desconhecido")
-            trap = int(dog.get("trapNum", 0))
-            peso_atual_card = float(dog.get("weight", 0) or 0)
+            n, t, p_card = dog.get("dogName", ""), int(dog.get("trapNum", 0)), float(dog.get("weight", 0) or 0)
             forms = dog.get("forms", [])
             if not forms: continue
+            dist = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
+            for c in forms:
+                g = c.get("gr") or c.get("grade") or "A5"
+                if not re.match(r'^A\d+', str(g)):
+                    for v in c.values():
+                        if isinstance(v, str) and re.match(r'^([A-Z]\d{1,2})$', v.strip().upper()):
+                            g = v.strip().upper(); break
+                regs.append({
+                    "Galgo": n, "Trap_Num": t, "Trap": get_emoji(t),
+                    "Split": float(c.get("sectionalTime", 0) or 0), "CalTm": float(c.get("calcRTimes", 0) or 0), 
+                    "Going": c.get("goingType", "N"), "Bends": c.get("bndPos", "4444"), 
+                    "Fin": str(c.get("outcomeDesc", "6")), "Remarks": c.get("closeUpCmnt", ""), 
+                    "Peso_Atual_Card": p_card, "Peso_Corrida": float(c.get("weight", 0) or 0),
+                    "Dias": (d_obj - datetime.strptime(c.get("raceTime", dt)[:10], "%Y-%m-%d")).days, 
+                    "Grade": str(g), "Data_Corrida": c.get("raceTime", "")[:10], 
+                    "Distancia": re.sub(r'[^\d]', '', str(c.get("distance", "480"))), "Total_Caes": total
+                })
+        return pd.DataFrame(regs), meta, None
+    except Exception as e: return None, None, str(e)
 
-            dist_hoje_str = re.sub(r'[^\d]', '', str(forms[0].get("distance", "480")))
-
-            for corrida in forms:
-                grade = corrida.get("gr") or corrida.get("grade")
-                if not grade:
-                    for v in corrida.values():
-                        if isinstance(v, str):
-                            m = re.match(r'^([A-Z]\d{1,2})$', v.strip().upper())
-                            if m:
-                                grade = m.group(1)
-                                break
-                if not grade: grade = "A5" 
-                            
-                dist_corrida_str = re.sub(r'[^\d]', '', str(corrida.get("distance", "480")))
-                peso_corrida = float(corrida.get("weight", 0) or 0)
-
-                reg = {
-                    "Galgo": nome, "Trap_Num": trap, "Trap": get_trap_emoji(trap),
-                    "Split": float(corrida.get("sectionalTime", 0) or 0),
-                    "CalTm": float(corrida.get("calcRTimes", 0) or 0), 
-                    "Going": corrida.get("goingType", "N"),
-                    "Bends": corrida.get("bndPos", "4444"), 
-                    "Fin": str(corrida.get("outcomeDesc", "6")),
-                    "Remarks": corrida.get("closeUpCmnt", ""), 
-                    "Peso_Atual_Card": peso_atual_card,
-                    "Peso_Corrida": peso_corrida,
-                    "Dias": (r_date_obj - datetime.strptime(corrida.get("raceTime", r_date_str)[:10], "%Y-%m-%d")).days, 
-                    "Grade": grade, 
-                    "Data_Corrida": corrida.get("raceTime", "")[:10],
-                    "Distancia": dist_corrida_str,
-                    "Total_Caes": total_caes
-                }
-                registros.append(reg)
-                
-        if not registros: 
-            return None, None, "Erro ao processar histórico."
-        return pd.DataFrame(registros), meta, None
-    except Exception as e:
-        return None, None, f"Erro na extração: {str(e)}"
-
-# =========================================================
-# FUNÇÃO PARA RENDERIZAR TABELA AVB COM DIFERENÇA
-# =========================================================
-def render_avb_table(v, d, forca):
+def render_avb(v, d, f):
     cols = ["AvB", "Overall", "Cat", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca", "Força"]
-    
-    def fmt_diff(val_d, val_v, is_int=False):
+    def fmt(x, y, i=False):
         try:
-            diff = float(val_d) - float(val_v)
-            if is_int:
-                return f"{int(val_d)} ({int(diff):+d})"
-            return f"{float(val_d):.2f} ({diff:+.2f})"
-        except:
-            return str(val_d)
+            diff = float(x) - float(y)
+            return f"{int(x)} ({int(diff):+d})" if i else f"{float(x):.2f} ({diff:+.2f})"
+        except: return str(x)
+    rv = {"AvB": f"⭐ {v['Trap']} {v['Galgo']}", "Overall": round(v['Overall'], 2), "Cat": v['Cat'], "Perfil": v['Perfil'], "Histórico": v['Histórico'], "Peso": v['Peso'], "Dias": v['Dias'], "Split": round(v['Split'], 2), "Time": round(v['Time'], 2), "Time_Ajust": round(v['Time_Ajust'], 2), "M_Split": round(v['M_Split'], 2), "M_Time": round(v['M_Time'], 2), "Ritmo": round(v['Ritmo'], 2), "Recup_Str": v['Recup_Str'], "Confianca": f"{v['Confianca']}%", "Força": round(f, 2)}
+    rd = {"AvB": f"   {d['Trap']} {d['Galgo']}", "Overall": fmt(d['Overall'], v['Overall']), "Cat": fmt(d['Cat'], v['Cat'], True), "Perfil": d['Perfil'], "Histórico": d['Histórico'], "Peso": fmt(d['Peso'], v['Peso']), "Dias": fmt(d['Dias'], v['Dias'], True), "Split": fmt(d['Split'], v['Split']), "Time": fmt(d['Time'], v['Time']), "Time_Ajust": fmt(d['Time_Ajust'], v['Time_Ajust']), "M_Split": fmt(d['M_Split'], v['M_Split']), "M_Time": fmt(d['M_Time'], v['M_Time']), "Ritmo": fmt(d['Ritmo'], v['Ritmo']), "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)", "Força": ""}
+    sep = {c: "-" for c in cols}; sep["AvB"] = "-"
+    return pd.DataFrame([rv, rd, sep])
 
-    row_v = {
-        "AvB": f"⭐ {v['Trap']} {v['Galgo']}", 
-        "Overall": round(v['Overall'], 2), 
-        "Cat": v['Cat'], 
-        "Perfil": v['Perfil'], 
-        "Histórico": v['Histórico'], 
-        "Peso": v['Peso'], 
-        "Dias": v['Dias'], 
-        "Split": round(v['Split'], 2), 
-        "Time": round(v['Time'], 2), 
-        "Time_Ajust": round(v['Time_Ajust'], 2), 
-        "M_Split": round(v['M_Split'], 2), 
-        "M_Time": round(v['M_Time'], 2), 
-        "Ritmo": round(v['Ritmo'], 2), 
-        "Recup_Str": v['Recup_Str'], 
-        "Confianca": f"{v['Confianca']}%",
-        "Força": round(forca, 2)
-    }
-    
-    row_d = {
-        "AvB": f"   {d['Trap']} {d['Galgo']}", 
-        "Overall": fmt_diff(d['Overall'], v['Overall']), 
-        "Cat": fmt_diff(d['Cat'], v['Cat'], is_int=True), 
-        "Perfil": d['Perfil'], 
-        "Histórico": d['Histórico'], 
-        "Peso": fmt_diff(d['Peso'], v['Peso']), 
-        "Dias": fmt_diff(d['Dias'], v['Dias'], is_int=True), 
-        "Split": fmt_diff(d['Split'], v['Split']), 
-        "Time": fmt_diff(d['Time'], v['Time']), 
-        "Time_Ajust": fmt_diff(d['Time_Ajust'], v['Time_Ajust']), 
-        "M_Split": fmt_diff(d['M_Split'], v['M_Split']), 
-        "M_Time": fmt_diff(d['M_Time'], v['M_Time']), 
-        "Ritmo": fmt_diff(d['Ritmo'], v['Ritmo']), 
-        "Recup_Str": f"{d['Recup']:.2f}% ({d['Recup'] - v['Recup']:+.2f}%)", 
-        "Confianca": f"{d['Confianca']}% ({d['Confianca'] - v['Confianca']:+d}%)",
-        "Força": ""
-    }
-    
-    row_sep = {c: "-" for c in cols}
-    row_sep["AvB"] = "-"
-
-    df = pd.DataFrame([row_v, row_d, row_sep])
-    return df
-
-# =========================================================
-# INTERFACE E LÓGICA DIB 2.7
-# =========================================================
-url_input = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/race_id=...")
-
-if st.button("Analisar Corrida", type="primary") and url_input:
-    with st.spinner("Processando DIB 2.7..."):
-        df_bruto, meta, erro = extrair_dados(url_input)
-        
-        if erro:
-            st.error(erro)
-        elif df_bruto is not None and not df_bruto.empty:
+url = st.text_input("Link da corrida")
+if st.button("Analisar", type="primary") and url:
+    with st.spinner("Processando..."):
+        df_b, meta, err = extrair(url)
+        if err: st.error(err)
+        elif df_b is not None and not df_b.empty:
             try:
-                classe_hoje = meta["classe"]
-                dist_hoje = df_bruto["Distancia"].iloc[0]
-                df = df_bruto[(df_bruto["Distancia"] == dist_hoje) & (df_bruto["CalTm"] > 0)].copy()
-                
-                if df.empty:
-                    st.warning(f"Nenhum galgo com corrida válida na distância de {dist_hoje}m.")
+                cat_h, d_h = meta["cat"], df_b["Distancia"].iloc[0]
+                df = df_b[(df_b["Distancia"] == d_h) & (df_b["CalTm"] > 0)].copy()
+                if df.empty: st.warning("Sem corridas válidas.")
                 else:
-                    df["Going_adj"] = df["Going"].apply(parse_going)
-                    df["Traffic_adj"] = df["Remarks"].apply(parse_traffic)
-                    df["Time_Ajust"] = df["CalTm"] - df["Going_adj"] - df["Traffic_adj"]
+                    df["Time_Ajust"] = df["CalTm"] - df["Going"].apply(parse_going) - df["Remarks"].apply(parse_traffic)
                     df["Has_Traffic"] = df["Remarks"].apply(is_traffic)
-                    
-                    bends_split = df["Bends"].apply(lambda x: pd.Series(get_bends(x)))
-                    df["Bend_1"] = bends_split[0]
+                    b_s = df["Bends"].apply(lambda x: pd.Series(get_bends(x))); df["Bend_1"] = b_s[0]
                     df["Fin_num"] = pd.to_numeric(df["Fin"].str.extract(r'(\d+)')[0], errors="coerce").fillna(6)
-
                     res = []
-                    for nome, group in df.groupby("Galgo"):
-                        group = group.sort_values("Data_Corrida", ascending=False)
-                        ultima_geral = group.iloc[0]
-                        
-                        validas = group[group['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
-                        if validas.empty: 
-                            continue 
-                        
-                        ultima_oficial = validas.iloc[0]
-                        
-                        def weighted_avg(g, col):
-                            weights = np.array([5, 4, 3, 2, 1][:len(g)])
-                            return np.average(g[col], weights=weights)
-                        
-                        m_time = weighted_avg(validas, "CalTm")
-                        m_split = weighted_avg(validas, "Split")
-                        m_ajust = validas["Time_Ajust"].mean()
-                        ritmo = m_time - m_split
-                        
-                        clean_runs = validas[~validas["Has_Traffic"]]
-                        if not clean_runs.empty:
-                            recup_vals = ((clean_runs["Bend_1"] - clean_runs["Fin_num"]) / group["Total_Caes"].iloc[0]) * 100
-                            recup_med = recup_vals.mean()
-                            ganhou = (recup_vals > 0).sum()
-                            perdeu = (recup_vals < 0).sum()
-                            recup_str = f"{recup_med:.2f}% ({ganhou}/{perdeu})"
-                        else:
-                            recup_med = 0.0
-                            recup_str = "0.00% (0/0)"
-                        
-                        match_h = re.search(r'A(\d+)', classe_hoje)
-                        match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
-                        
-                        n_h = int(match_h.group(1)) if match_h else 5
-                        n_u = int(match_u.group(1)) if match_u else 5
-                        
-                        cat_base = get_cat_base(classe_hoje)
-                        
-                        if n_u < n_h: cat_mod = 2
-                        elif n_u > n_h: cat_mod = -2
-                        else: cat_mod = 0
-                            
-                        cat_final = cat_base + cat_mod
-                        
-                        f_mom = 3.0 if ultima_oficial["Fin_num"] == 1 else (-2.0 if ultima_oficial["Fin_num"] >= 4 and n_u >= n_h else 0.0)
-                        dif_peso = abs(ultima_geral["Peso_Atual_Card"] - ultima_oficial["Peso_Corrida"])
-                        f_peso = -5.0 if dif_peso > 2.0 else (-2.0 if 1.1 <= dif_peso <= 1.9 else 0.0)
-                        f_dias = -5.0 if ultima_geral["Dias"] < 4 else (-3.0 if 29 <= ultima_geral["Dias"] <= 45 else (-5.0 if ultima_geral["Dias"] > 45 else 0.0))
-                        
-                        rems = str(ultima_oficial["Remarks"]).upper()
-                        f_rem = 1.5 if "EP" in rems or "LD" in rems else 0.0
-                        f_rem += 5.0 if "CLRRN" in rems else 0.0
-                        f_rem -= 10.0 if "SAW" in rems else 0.0
-                        f_rem -= 7.0 if "CRD1" in rems or "BMP1" in rems else 0.0
-                        
-                        f_total = f_mom + f_peso + f_dias + f_rem
-                        
-                        t_count = validas["Has_Traffic"].sum()
-                        perfil = "✅ Limpo" if t_count <= 1 else ("⚠️ Irregular" if t_count == 2 else "🔴 Trombador")
-                        p_pts = 10 if t_count <= 1 else (5 if t_count == 2 else 2.5)
-                        
-                        conf = len(validas) * 20
-                        is_blocked = ultima_geral["Grade"].startswith("T") or conf < 60
-                        nome_exibicao = f"[BLOQUEADO] {nome}" if is_blocked else nome
-
+                    for n, g in df.groupby("Galgo"):
+                        g = g.sort_values("Data_Corrida", ascending=False); u_g = g.iloc[0]
+                        val = g[g['Grade'].str.match(r'^A\d{1,2}$', na=False)].copy()
+                        if val.empty: continue
+                        u_o = val.iloc[0]
+                        wa = lambda c: np.average(val[c], weights=[5,4,3,2,1][:len(val)])
+                        m_t, m_s = wa("CalTm"), wa("Split")
+                        clean = val[~val["Has_Traffic"]]
+                        rec_med = ((clean["Bend_1"] - clean["Fin_num"]) / g["Total_Caes"].iloc[0] * 100).mean() if not clean.empty else 0.0
+                        rec_str = f"{rec_med:.2f}% ({(clean['Bend_1'] > clean['Fin_num']).sum()}/{(clean['Bend_1'] < clean['Fin_num']).sum()})" if not clean.empty else "0.00% (0/0)"
+                        m_h = re.search(r'A(\d+)', cat_h); m_u = re.search(r'A(\d+)', u_o["Grade"])
+                        n_h = int(m_h.group(1)) if m_h else 5; n_u = int(m_u.group(1)) if m_u else 5
+                        c_b = get_cat(cat_h); c_m = 2 if n_u < n_h else (-2 if n_u > n_h else 0)
+                        f_m = 3.0 if u_o["Fin_num"] == 1 else (-2.0 if u_o["Fin_num"] >= 4 and n_u >= n_h else 0.0)
+                        d_p = abs(u_g["Peso_Atual_Card"] - u_o["Peso_Corrida"])
+                        f_p = -5.0 if d_p > 2.0 else (-2.0 if 1.1 <= d_p <= 1.9 else 0.0)
+                        f_d = -5.0 if u_g["Dias"] < 4 else (-3.0 if 29 <= u_g["Dias"] <= 45 else (-5.0 if u_g["Dias"] > 45 else 0.0))
+                        rms = str(u_o["Remarks"]).upper()
+                        f_r = (1.5 if "EP" in rms or "LD" in rms else 0) + (5.0 if "CLRRN" in rms else 0) - (10.0 if "SAW" in rms else 0) - (7.0 if "CRD1" in rms or "BMP1" in rms else 0)
+                        t_c = val["Has_Traffic"].sum()
+                        perf = "✅ Limpo" if t_c <= 1 else ("⚠️ Irregular" if t_c == 2 else "🔴 Trombador")
+                        p_p = 10 if t_c <= 1 else (5 if t_c == 2 else 2.5)
+                        cnf = len(val) * 20; blk = u_g["Grade"].startswith("T") or cnf < 60
                         res.append({
-                            "Trap": ultima_geral["Trap"], "Galgo_Original": nome, "Galgo": nome_exibicao, 
-                            "Cat_Base": cat_base, "Mod": cat_mod, "Cat": cat_final, 
-                            "Fatores": round(f_total, 2), "Perfil": perfil, "P_pts": p_pts,
-                            "Histórico": "·".join(validas["Grade"].head(5)), 
-                            "Peso": ultima_oficial["Peso_Corrida"], "Dias": ultima_geral["Dias"],
-                            "Split": ultima_oficial["Split"], "Time": ultima_oficial["CalTm"], "Time_Ajust": m_ajust, 
-                            "M_Split": m_split, "M_Time": m_time, "Ritmo": ritmo,
-                            "Recup": recup_med, "Recup_Str": recup_str, 
-                            "Confianca": conf, "Block": is_blocked
+                            "Trap": u_g["Trap"], "Galgo_Original": n, "Galgo": f"[BLOQUEADO] {n}" if blk else n, 
+                            "Cat_Base": c_b, "Mod": c_m, "Cat": c_b + c_m, "Fatores": round(f_m + f_p + f_d + f_r, 2), 
+                            "Perfil": perf, "P_pts": p_p, "Histórico": "·".join(val["Grade"].head(5)), 
+                            "Peso": u_o["Peso_Corrida"], "Dias": u_g["Dias"], "Split": u_o["Split"], "Time": u_o["CalTm"], 
+                            "Time_Ajust": val["Time_Ajust"].mean(), "M_Split": m_s, "M_Time": m_t, "Ritmo": m_t - m_s, 
+                            "Recup": rec_med, "Recup_Str": rec_str, "Confianca": cnf, "Block": blk
                         })
-                    
                     if res:
                         agg = pd.DataFrame(res)
-                        
-                        pts_ajust = calc_prop_points(agg["Time_Ajust"], 40, 5)
-                        pts_mtime = calc_prop_points(agg["M_Time"], 30, 5)
-                        pts_msplit = calc_prop_points(agg["M_Split"], 15, 2)
-                        pts_ritmo = calc_prop_points(agg["Ritmo"], 15, 2)
-                        agg["Vel_pts"] = pts_ajust + pts_mtime + pts_msplit + pts_ritmo
-                        
-                        recup_pts = (5 + (agg["Recup"] / 10)).clip(0, 10)
-                        
-                        agg["Overall"] = agg["Vel_pts"] + agg["Cat"] + agg["P_pts"] + recup_pts + agg["Fatores"]
+                        agg["Overall"] = (calc_prop(agg["Time_Ajust"], 40, 5) + calc_prop(agg["M_Time"], 30, 5) + calc_prop(agg["M_Split"], 15, 2) + calc_prop(agg["Ritmo"], 15, 2) + agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"])
                         agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
-                        
-                        top3_splits = agg["M_Split"].nsmallest(3).tolist()
-                        agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
-                        
-                        header = f"### 🏁 {meta['pista']} {meta['hora_pista']} (BR {meta['hora_br']}) · Race {meta['race_num']} · {classe_hoje} · {dist_hoje}m"
-                        st.markdown(header)
-
-                        medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
-                        ranking = " > ".join([f"{medals[i]} {row['Trap']} {row['Galgo'].replace('[BLOQUEADO] ', '')}" for i, row in agg.iterrows()])
-                        st.info(ranking)
-
-                        cols_proj = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
-                        st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
-                        
-                        elegiveis = agg[~agg["Block"]].reset_index(drop=True)
-                        def calc_forca(v, d):
-                            return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
-
-                        avbs_alvo, avbs_princ, avbs_sec = [], [], []
-                        
-                        for _, tgt in agg[agg["Is_Target"]].iterrows():
-                            for _, atk in elegiveis[elegiveis["Overall"] > tgt["Overall"]].iterrows():
-                                f = calc_forca(atk, tgt)
-                                if f >= 50: avbs_alvo.append((atk, tgt, f))
-
-                        for i in range(min(3, len(elegiveis))):
-                            v = elegiveis.iloc[i]
+                        t3_s = agg["M_Split"].nsmallest(3).tolist(); agg["Is_Target"] = (agg["M_Split"] > t3_s[-1]) & (agg["Recup"] <= 0)
+                        st.markdown(f"### 🏁 {meta['pista']} {meta['hora']} (BR {meta['br']}) · Race {meta['num']} · {cat_h} · {d_h}m")
+                        st.info(" > ".join([f"{['🥇','🥈','🥉','4º','5º','6º'][i]} {r['Trap']} {r['Galgo'].replace('[BLOQUEADO] ', '')}" for i, r in agg.iterrows()]))
+                        cols = ["Trap", "Galgo", "Overall", "Cat_Base", "Mod", "Cat", "Fatores", "Perfil", "Histórico", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
+                        st.dataframe(agg[cols].round(2), use_container_width=True, hide_index=True)
+                        elig = agg[~agg["Block"]].reset_index(drop=True)
+                        cf = lambda v, d: (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
+                        a_alvo, a_princ, a_sec = [], [], []
+                        for _, t in agg[agg["Is_Target"]].iterrows():
+                            for _, a in elig[elig["Overall"] > t["Overall"]].iterrows():
+                                f = cf(a, t)
+                                if f >= 50: a_alvo.append((a, t, f))
+                        for i in range(min(3, len(elig))):
+                            v = elig.iloc[i]
                             for j in [i+2, i+3]:
-                                if j < len(elegiveis):
-                                    d = elegiveis.iloc[j]
-                                    if d["Is_Target"]: continue
-                                    f = calc_forca(v, d)
-                                    if f >= 50: avbs_princ.append((v, d, f))
-                                    elif f >= 40: avbs_sec.append((v, d, f))
-
+                                if j < len(elig):
+                                    d = elig.iloc[j]
+                                    if not d["Is_Target"]:
+                                        f = cf(v, d)
+                                        if f >= 50: a_princ.append((v, d, f))
+                                        elif f >= 40: a_sec.append((v, d, f))
                         st.markdown("---")
-                        
-                        st.markdown("### 🎯 Planilha de AVB do Alvo")
-                        if avbs_alvo:
-                            for v, d, f in avbs_alvo:
-                                df_avb = render_avb_table(v, d, f)
-                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: 
-                            st.info("Nenhum confronto de Alvo gerado.")
-
-                        st.markdown("### ⚔️ Planilha de AVB Principal (Elite)")
-                        if avbs_princ:
-                            for v, d, f in avbs_princ:
-                                df_avb = render_avb_table(v, d, f)
-                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: 
-                            st.info("Nenhum AVB Principal gerado (Força ≥ 50.0).")
-
-                        st.markdown("### 🛡️ Planilha de AVB Secundário")
-                        if avbs_sec:
-                            for v, d, f in avbs_sec:
-                                df_avb = render_avb_table(v, d, f)
-                                st.dataframe(df_avb, use_container_width=True, hide_index=True)
-                        else: 
-                            st.info("Nenhum AVB Secundário gerado (Força 40.0 a 49.9).")
-
+                        for title, arr in [("🎯 AVB do Alvo", a_alvo), ("⚔️ AVB Principal", a_princ), ("🛡️ AVB Secundário", a_sec)]:
+                            st.markdown(f"### {title}")
+                            if arr:
+                                for v, d, f in arr: st.dataframe(render_avb(v, d, f), use_container_width=True, hide_index=True)
+                            else: st.info("Nenhum confronto.")
             except Exception as e:
-                st.error(f"Erro no processamento: 
+                st.error(f"Erro no processamento: {e}")
