@@ -56,7 +56,7 @@ def get_trap_emoji(trap_num):
     return trap_map.get(int(trap_num), str(trap_num))
 
 # =========================================================
-# EXTRAIR DADOS (API RACING POST)
+# EXTRAIR DADOS (CORRIGIDO COM ANTI-BLOQUEIO)
 # =========================================================
 def extrair_dados(url):
     try:
@@ -65,12 +65,31 @@ def extrair_dados(url):
         r_date_obj = datetime.strptime(r_date_str, "%Y-%m-%d")
 
         api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        data = requests.get(api_url, headers=headers, timeout=15).json()
+        
+        # Cabeçalhos de um navegador real para evitar bloqueio do site
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://greyhoundbet.racingpost.com/"
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        # Verifica se o site bloqueou (Erro 403) ou se a página não existe (Erro 404)
+        if response.status_code != 200:
+            st.error(f"Erro de conexão: O Racing Post bloqueou o acesso (Código {response.status_code}). Tente novamente em alguns minutos.")
+            return None
+
+        try:
+            data = response.json()
+        except requests.exceptions.JSONDecodeError:
+            st.error("O Racing Post retornou uma página em HTML em vez dos dados. O link pode estar errado ou expirou.")
+            return None
 
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
-            st.warning("Nenhum dado encontrado.")
+            st.warning("Nenhum dado encontrado. Verifique se a corrida tem histórico.")
             return None
 
         registros = []
@@ -150,17 +169,14 @@ if st.button("Analisar Corrida", type="primary") and url_input:
 
                     res = []
                     for nome, group in df.groupby("Galgo"):
-                        # Separa a corrida mais recente (para Dias) e as válidas (para tempos)
                         group = group.sort_values("Data_Corrida", ascending=False)
                         ultima_geral = group.iloc[0]
                         
-                        # FILTRO CRÍTICO: Ignora Trials (T) e Handicaps (HP) para as métricas
                         validas = group[~group['Grade'].str.startswith(('T', 'HP'))].copy()
-                        if validas.empty: continue # Se não tiver corrida oficial, pula
+                        if validas.empty: continue 
                         
                         ultima_oficial = validas.iloc[0]
                         
-                        # Médias Ponderadas (Time Decay)
                         def weighted_avg(g, col):
                             weights = np.array([5, 4, 3, 2, 1][:len(g)])
                             return np.average(g[col], weights=weights)
@@ -170,7 +186,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         m_ajust = validas["Time_Ajust"].mean()
                         ritmo = m_time - m_split
                         
-                        # Recuperação Blindada
                         clean_runs = validas[~validas["Has_Traffic"]]
                         if not clean_runs.empty:
                             recup_vals = ((clean_runs["Bend_1"] - clean_runs["Fin_num"]) / group["Total_Caes"].iloc[0]) * 100
@@ -182,7 +197,7 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                             recup_med = 0.0
                             recup_str = "0.00% (0/0)"
                         
-                        # --- CÁLCULO EXATO DA CATEGORIA ---
+                        # Cálculo da Categoria (Corrigido)
                         match_h = re.search(r'A(\d+)', classe_hoje)
                         match_u = re.search(r'A(\d+)', ultima_oficial["Grade"])
                         
@@ -191,7 +206,6 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         
                         cat_base = get_cat_base(classe_hoje)
                         
-                        # Ex: n_h=5 (A5), n_u=4 (A4). n_u < n_h = Desceu = +2
                         if n_u < n_h:
                             cat_mod = 2
                         elif n_u > n_h:
@@ -202,14 +216,11 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         cat_final = cat_base + cat_mod
                         
                         # Fatores Táticos
-                        # Momento: Vitória = 1. Derrota (>=4) anulada se desceu de classe (n_u < n_h).
                         f_mom = 3.0 if ultima_oficial["Fin_num"] == 1 else (-2.0 if ultima_oficial["Fin_num"] >= 4 and n_u >= n_h else 0.0)
                         
-                        # Peso: Atual do card - Peso da Última Oficial
                         dif_peso = abs(ultima_geral["Peso_Atual_Card"] - ultima_oficial["Peso_Corrida"])
                         f_peso = -5.0 if dif_peso > 2.0 else (-2.0 if 1.1 <= dif_peso <= 1.9 else 0.0)
                         
-                        # Dias: Baseado na última corrida (Trial conta para dias sem correr)
                         f_dias = -5.0 if ultima_geral["Dias"] < 4 else (-3.0 if 29 <= ultima_geral["Dias"] <= 45 else (-5.0 if ultima_geral["Dias"] > 45 else 0.0))
                         
                         rems = str(ultima_oficial["Remarks"]).upper()
@@ -220,12 +231,10 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                         
                         f_total = f_mom + f_peso + f_dias + f_rem
                         
-                        # Perfil
                         t_count = validas["Has_Traffic"].sum()
                         perfil = "✅ Limpo" if t_count <= 1 else ("⚠️ Irregular" if t_count == 2 else "🔴 Trombador")
                         p_pts = 10 if t_count <= 1 else (5 if t_count == 2 else 2.5)
                         
-                        # Travas
                         conf = len(validas) * 20
                         is_blocked = ultima_geral["Grade"].startswith("T") or conf < 60
                         nome_exibicao = f"[BLOQUEADO] {nome}" if is_blocked else nome
@@ -251,39 +260,28 @@ if st.button("Analisar Corrida", type="primary") and url_input:
                     pts_ritmo = calc_prop_points(agg["Ritmo"], 15, 2)
                     agg["Vel_pts"] = pts_ajust + pts_mtime + pts_msplit + pts_ritmo
                     
-                    # Recuperação (0 a 10)
                     recup_pts = (5 + (agg["Recup"] / 10)).clip(0, 10)
                     
-                    # Overall Final
                     agg["Overall"] = agg["Vel_pts"] + agg["Cat"] + agg["P_pts"] + recup_pts + agg["Fatores"]
                     agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
                     
-                    # Trava de Alvo
                     top3_splits = agg["M_Split"].nsmallest(3).tolist()
                     agg["Is_Target"] = (agg["M_Split"] > top3_splits[-1]) & (agg["Recup"] <= 0)
                     
-                    # =========================================================
-                    # EXIBIÇÃO PROJEÇÃO
-                    # =========================================================
                     st.markdown(f"### 🏁 {classe_hoje} · {dist_hoje}m")
                     medals = ["🥇", "🥈", "🥉", "4º", "5º", "6º"]
                     ranking = " > ".join([f"{medals[i]} {row['Trap']} {row['Galgo'].replace('[BLOQUEADO] ', '')}" for i, row in agg.iterrows()])
                     st.info(ranking)
 
-                    # Exibição no formato exato solicitado
                     cols_proj = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Histórico", "Posicao_Med", "Peso", "Dias", "Split", "Time", "Time_Ajust", "M_Split", "M_Time", "Ritmo", "Recup_Str", "Confianca"]
                     
-                    # Criando colunas que não existiam diretamente
                     agg["Histórico"] = agg["Grade"]
-                    agg["Posicao_Med"] = "-" # Se quiser calcular a posição média exata depois
+                    agg["Posicao_Med"] = "-" 
                     
                     st.dataframe(agg[cols_proj].round(2), use_container_width=True, hide_index=True)
 
-                    # =========================================================
-                    # MATCHMAKING E AVBs
-                    # =========================================================
+                    # AVBs
                     elegiveis = agg[~agg["Block"]].reset_index(drop=True)
-                    
                     def calc_forca(v, d):
                         return (v["Overall"] - d["Overall"]) + 100*(d["M_Time"] - v["M_Time"]) + (v["Recup"] - d["Recup"])/2 + (v["Cat"] - d["Cat"])*2
 
