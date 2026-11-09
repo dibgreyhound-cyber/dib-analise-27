@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao: mesmo fluxo do app anterior (link do Racing Post -> blocks.sd?blocks=form)
+- Extracao automatica de metadados (Pista, Horario, Race, Classe, Post Pick)
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB)
-- Exibicao: tabelas no estilo do artefato (emojis de posicao, stacked V/D, medalhas)
+- Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
 import re
 import html
@@ -25,7 +25,7 @@ CFG = {
     "CAT_BASE_MODE": "media",          # "media" das classes validas | "ultima" corrida valida
     "CAT_BONUS": 2.0,                  # desceu de classe +2 / subiu -2
     "N_CORREDORES": 6,                 # total de corredores para a % de Recup
-    "TRAFFIC_ADJ": {"baulk": 0.20, "crd": 0.10, "bmp": 0.10, "fcd": 0.10},  # Blk nao esta no manual
+    "TRAFFIC_ADJ": {"baulk": 0.20, "crd": 0.10, "bmp": 0.10, "fcd": 0.10},
     "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},        # Base de Velocidade (100)
     "VEL_MIN": 0.0,                    # pontos do pior em cada item
     "PERFIL_PTS": {"Limpo": 10.0, "Irregular": 5.0, "Trombador": 2.5},
@@ -36,7 +36,7 @@ CFG = {
     "MOMENTUM_VITORIA": 3.0, "MOMENTUM_DERROTA": -2.0, "DERROTA_POS_MIN": 5,
     "PESO_DIAS_NO_OVERALL": True,      # soma os pontos de Peso e Dias no Overall
     "FORCA_PRINCIPAL": 50.0, 
-    "FORCA_SECUNDARIO": 45.0,          # Ajustado para 45.0
+    "FORCA_SECUNDARIO": 45.0,          # Intervalo 45.0 a 49.9
     "CONF_MIN_VENCEDOR": 60.0,
 }
 
@@ -62,7 +62,7 @@ RANK_EMOJI = {1: "🟢", 2: "🟡", 3: "⚪", 4: "🔵", 5: "🟠", 6: "🔴"}
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 # =====================================================================
-# UTILIDADES DE LEITURA
+# UTILIDADES DE LEITURA E EXTRACAO
 # =====================================================================
 
 def pick(d, keys, default=None):
@@ -243,13 +243,94 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
+def extrair_metadados_json(data, dogs):
+    """Extrai pista, horario, race, classe e post pick de forma inteligente do JSON."""
+    info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
+    
+    # 1. Pista
+    pista = data.get("trackName") or data.get("track") or data.get("meetingName") or data.get("courseName")
+    if not pista and dogs and dogs[0].get("runs"):
+        # Tenta pegar da primeira corrida do primeiro galgo
+        pista = dogs[0]["runs"][0].get("track")
+    info["pista"] = str(pista or "Desconhecida").strip()
+    
+    # 2. Horário da prova
+    t_raw = data.get("raceTime") or data.get("time") or data.get("offTime") or data.get("displayTime")
+    if not t_raw:
+        # Tenta procurar em strings do JSON
+        def achar_hora(obj):
+            nonlocal t_raw
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str) and re.search(r"\d{1,2}:\d{2}", v) and not t_raw:
+                        m_h = re.search(r"(\d{1,2}:\d{2})", v)
+                        if m_h:
+                            t_raw = m_h.group(1)
+                    elif isinstance(v, (dict, list)):
+                        achar_hora(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    achar_hora(item)
+        achar_hora(data)
+    
+    if t_raw:
+        m_time = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
+        if m_time:
+            info["hora"] = f"{m_time.group(1)}"
+
+    # 3. Número da Race
+    r_num = data.get("raceNum") or data.get("raceNumber") or data.get("rNum") or data.get("raceNumberDesc")
+    if not r_num:
+        def achar_racenum(obj):
+            nonlocal r_num
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if "racenumber" in k.lower() or "racenum" in k.lower() or k.lower() == "rnum":
+                        r_num = v
+                    elif isinstance(v, (dict, list)):
+                        achar_racenum(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    achar_racenum(item)
+        achar_racenum(data)
+    if r_num:
+        info["race"] = str(r_num).replace("Race", "").strip()
+
+    # 4. Classe (Grade)
+    grade = data.get("raceClass") or data.get("grade") or data.get("class")
+    if not grade and dogs and dogs[0].get("runs"):
+        grade = dogs[0]["runs"][0].get("grade")
+    info["classe"] = str(grade or "").strip().upper()
+
+    # 5. Post Pick
+    pp_val = data.get("postPick") or data.get("post_pick")
+    if not pp_val:
+        def achar_pp(obj):
+            nonlocal pp_val
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str) and "post pick" in v.lower():
+                        m_pp = re.search(r"post\s*pick[:\s]*([\d\-_/]+)", v, re.IGNORECASE)
+                        if m_pp:
+                            pp_val = m_pp.group(1)
+                    elif isinstance(v, (dict, list)):
+                        achar_pp(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    achar_pp(item)
+        achar_pp(data)
+    if pp_val:
+        info["post_pick"] = str(pp_val).strip()
+
+    return info
+
 def extrair_dados_racingpost(url):
     try:
         race_id_match = re.search(r"race_id=(\d+)", url)
         r_date_match = re.search(r"r_date=([\d-]+)", url)
         if not race_id_match or not r_date_match:
             st.error("Link inválido. Precisa ter 'race_id' e 'r_date'.")
-            return None, None
+            return None, None, None
         race_id, r_date_str = race_id_match.group(1), r_date_match.group(1)
         api_url = (f"https://greyhoundbet.racingpost.com/card/blocks.sd?"
                    f"race_id={race_id}&r_date={r_date_str}&blocks=form")
@@ -266,7 +347,7 @@ def extrair_dados_racingpost(url):
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
             st.warning("Nenhum dado encontrado.")
-            return None, None
+            return None, None, None
         descobrir_chaves(dogs)
         out = []
         for dog in dogs:
@@ -278,10 +359,11 @@ def extrair_dados_racingpost(url):
                 "peso_atual": to_float(dog.get("weight")),
                 "runs": runs,
             })
-        return out, {"r_date": r_date_str, "raw_first": dogs[0]}
+        meta_info = extrair_metadados_json(data, out)
+        return out, {"r_date": r_date_str, "raw_first": dogs[0]}, meta_info
     except Exception as e:
         st.error(f"Erro: {e}")
-        return None, None
+        return None, None, None
 
 def diagnostico_campos(dogs):
     runs = [r for d in dogs for r in d["runs"]]
@@ -297,7 +379,7 @@ def diagnostico_campos(dogs):
 # CALCULO DO DIB 2.7
 # =====================================================================
 
-def oficial(r, ctx):
+ def oficial(r, ctx):
     return (grade_num(r["grade"]) is not None and r["dist"] is not None
             and abs(r["dist"] - ctx["dist"]) < 1
             and r["caltm"] is not None and r["caltm"] > 0)
@@ -713,16 +795,24 @@ def observacoes(rank):
     return "\n".join(out)
 
 def hora_br(hhmm):
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
+    if not hhmm:
+        return None
+    s = str(hhmm).strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})", s)
     if not m:
         return None
-    t = datetime(2000, 1, 1, int(m.group(1)), int(m.group(2))) - timedelta(hours=3)
-    h = t.hour % 12 or 12
-    return f"{h}:{t.minute:02d}"
+    h_val = int(m.group(1))
+    m_val = int(m.group(2))
+    # Se horario for menor que 9, converte formato 12h para 24h (ex: 5:24 -> 17:24)
+    if h_val < 9:
+        h_val += 12
+    t = datetime(2000, 1, 1, h_val, m_val) - timedelta(hours=3)
+    return t.strftime("%H:%M")
 
 # =====================================================================
 # APP
 # =====================================================================
+ 
 
 def mostrar_diagnostico(dogs, meta):
     st.markdown("**Campos lidos do JSON** (se algum estiver 0, ajuste o `FIELD_MAP` no topo do código):")
@@ -740,27 +830,35 @@ def main():
     st.title("🐾 Análise DIB 2.7")
     st.markdown(CSS, unsafe_allow_html=True)
 
-    with st.sidebar:
-        st.header("Dados da corrida")
-        pista = st.text_input("Pista", "")
-        hora = st.text_input("Horário da pista (ex.: 11:41)", "")
-        race = st.text_input("Race nº", "")
-        classe = st.text_input("Classe de hoje (ex.: A5)", "")
-        dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 3-1-6)", "")
-
+    # Botão e campo do link no topo
     st.subheader("🔗 Cole o link da corrida do Racing Post")
     url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
 
     if st.button("Analisar Corrida", type="primary") and url:
-        dogs, meta = extrair_dados_racingpost(url)
+        dogs, meta, meta_info = extrair_dados_racingpost(url)
         if dogs:
-            st.session_state["dib_data"] = (dogs, meta)
+            st.session_state["dib_data"] = (dogs, meta, meta_info)
+            # Atualiza os valores padrão na sessão para preencher a barra lateral
+            st.session_state["s_pista"] = meta_info.get("pista", "")
+            st.session_state["s_hora"] = meta_info.get("hora", "")
+            st.session_state["s_race"] = meta_info.get("race", "")
+            st.session_state["s_classe"] = meta_info.get("classe", "")
+            st.session_state["s_pp"] = meta_info.get("post_pick", "")
+
+    # Barra lateral com os inputs preenchidos automaticamente (ou via session_state)
+    with st.sidebar:
+        st.header("Dados da corrida")
+        pista = st.text_input("Pista", value=st.session_state.get("s_pista", ""))
+        hora = st.text_input("Horário da pista (ex.: 5:24)", value=st.session_state.get("s_hora", ""))
+        race = st.text_input("Race nº", value=st.session_state.get("s_race", ""))
+        classe = st.text_input("Classe de hoje (ex.: A3)", value=st.session_state.get("s_classe", ""))
+        dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
+        pp_in = st.text_input("Post Pick (ex.: 2-4-6)", value=st.session_state.get("s_pp", ""))
 
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
     else:
-        dogs, meta = st.session_state["dib_data"]
+        dogs, meta, meta_info = st.session_state["dib_data"]
         all_runs = [r for d in dogs for r in d["runs"] if r["dist"]]
         dist = float(dist_in) if dist_in else (pd.Series([r["dist"] for r in all_runs]).mode().iloc[0] if all_runs else 0)
         if not dist:
@@ -768,10 +866,12 @@ def main():
             mostrar_diagnostico(dogs, meta)
             return
         today = parse_date(meta["r_date"])
-        ctx = {"dist": dist, "today": today, "classe_n": grade_num(classe),
+        
+        # Usa a classe da barra lateral ou a detectada
+        cls_atual = classe or meta_info.get("classe", "")
+        ctx = {"dist": dist, "today": today, "classe_n": grade_num(cls_atual),
                "post_pick": [int(x) for x in re.findall(r"\d", pp_in)]}
-        if classe and not ctx["classe_n"]:
-            st.warning("Classe de hoje não reconhecida (use A1 a A11). O ajuste de classe foi ignorado.")
+        
         ds = [analisar_galgo(d, ctx) for d in dogs]
         rank = finalizar(ds, ctx)
         ds.sort(key=lambda d: d["trap"])
@@ -779,8 +879,8 @@ def main():
         tab_a, tab_d = st.tabs(["📋 Análise", "🔎 Diagnóstico e dados brutos"])
         with tab_a:
             br = hora_br(hora)
-            tit = f"{pista} {hora} (BR {br})" if br else pista
-            st.markdown(f"### {tit} · Race {race} · {classe} · {int(dist)}m · POST PICK: {pp_in or '-'}")
+            tit = f"{pista} {hora} (BR {br})" if hora else pista
+            st.markdown(f"### {tit} · Race {race} · {cls_atual} · {int(dist)}m · POST PICK: {pp_in or '-'}")
             st.markdown("#### Planilha de Projeção")
             st.markdown(tabela_projecao(ds), unsafe_allow_html=True)
             st.markdown("**Classificação geral:** " + classificacao(rank))
