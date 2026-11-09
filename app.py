@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick)
+- Correcao definitiva para valores nulos em rec_pts
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -29,7 +29,7 @@ CFG = {
     "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},        # Base de Velocidade (100)
     "VEL_MIN": 0.0,                    # pontos do pior em cada item
     "PERFIL_PTS": {"Limpo": 10.0, "Irregular": 5.0, "Trombador": 2.5},
-    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)),  # 0 a 10 pts
+    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)) if rec is not None else 5.0,
     "REMARKS_PTS": {"early": 1.5, "clear": 5.0, "slowaway": -10.0, "firstbend": -7.0},
     "TRAP_VAZIA": 1.5, "ESMAGAMENTO": -1.5, "TRAFEGO_SEVERO": -2.0, "WIDE": -1.0,
     "H2H": 1.0, "H2H_MARGEM_GRANDE": 3.0, "H2H_GRANDE": 2.0,
@@ -266,7 +266,7 @@ def extrair_metadados_json(data, info_card, dogs):
     if not info["pista"] and dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
-    # 2. Horário da Prova (Foco estrito nas chaves dedicadas)
+    # 2. Horário da Prova
     for src in fontes:
         for k in ["offTime", "scheduledTime", "displayTime", "time", "raceTime"]:
             val = src.get(k)
@@ -538,7 +538,7 @@ def finalizar(ds, ctx):
         d["vel"] = (pts_item("tadj", V["adj"], d) + pts_item("mtime", V["mtime"], d)
                     + pts_item("msplit", V["msplit"], d) + pts_item("ritmo", V["ritmo"], d))
         d["perfil_pts"] = CFG["PERFIL_PTS"][d["perfil"]]
-        d["rec_pts"] = CFG["RECUP_PTS"][d["rec"]] if "rec" in d and d["rec"] is not None else 5.0
+        d["rec_pts"] = CFG["RECUP_PTS"](d.get("rec"))
         fat = []
         t = d["trap"]
         if any(abs(t - v) == 1 for v in vac):
