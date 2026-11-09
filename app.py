@@ -144,11 +144,12 @@ def extrair(url):
     except Exception as e: return None, None, f"Erro na extração: {str(e)}"
 
 # =========================================================
-# ENTRADA DO USUÁRIO
+# ENTRADA DO USUÁRIO & BOTÃO
 # =========================================================
-url = st.text_input("Link da corrida (Racing Post)", placeholder="https://greyhoundbet.racingpost.com/#card/...")
+url = st.text_icon = st.text_input("Link da corrida (Racing Post)", placeholder="https://greyhoundbet.racingpost.com/#card/...")
+analisar_btn = st.button("Analisar", type="primary")
 
-if url:
+if analisar_btn and url:
     with st.spinner("Calculando DIB 2.7..."):
         df_b, meta, err = extrair(url)
         if err: 
@@ -181,137 +182,4 @@ if url:
                     cat_final = c_b + c_m
                     
                     d_p = abs(u_g["Peso_Atual_Card"] - u_o["Peso_Corrida"])
-                    f_peso = -5.0 if d_p > 2.0 else (-2.0 if 1.1 <= d_p <= 1.9 else 0.0)
-                    
-                    dias_desc = u_g["Dias"]
-                    f_dias = -5.0 if dias_desc < 4 else (-3.0 if 29 <= dias_desc <= 45 else (-5.0 if dias_desc > 45 else 0.0))
-                    
-                    last_5_dist = val_dist.head(5).copy()
-                    adj_times = [row["CalTm"] - parse_going(row["Going"]) - parse_traffic(row["Remarks"]) for _, row in last_5_dist.iterrows()]
-                    time_ajust_mean = np.mean(adj_times) if adj_times else u_o["CalTm"]
-                    
-                    w_vals = [5, 4, 3, 2, 1][:len(last_5_dist)]
-                    m_t = np.average(last_5_dist["CalTm"], weights=w_vals) if not last_5_dist.empty else u_o["CalTm"]
-                    m_s = np.average(last_5_dist["Split"], weights=w_vals) if not last_5_dist.empty else u_o["Split"]
-                    ritmo = m_t - m_s
-                    
-                    clean_races = last_5_dist[~last_5_dist["Remarks"].apply(is_traffic)]
-                    rec_vals = []
-                    for _, cr in clean_races.iterrows():
-                        bends = get_bends(cr["Bends"])
-                        fin_num = pd.to_numeric(str(cr["Fin"]).extract(r'(\d+)')[0], errors="coerce") if pd.notna(cr["Fin"]) else 6
-                        if pd.isna(fin_num): fin_num = 6
-                        rec_vals.append(((bends[0] - fin_num) / (cr["Total_Caes"] if cr["Total_Caes"] > 0 else 6)) * 100)
-                    
-                    rec_med = np.mean(rec_vals) if rec_vals else 0.0
-                    conf = min(len(val_dist), 5) * 20
-                    
-                    t_c = last_5_dist["Remarks"].apply(is_traffic).sum()
-                    if t_c <= 1: perf, p_pts = "✅ Limpo", 10.0
-                    elif t_c == 2: perf, p_pts = "⚠️ Irregular", 5.0
-                    else: perf, p_pts = "🔴 Trombador", 2.5
-                        
-                    rms = str(u_o["Remarks"]).upper()
-                    f_rem = (1.5 if "EP" in rms or "LD" in rms else 0) + (5.0 if "CLRRN" in rms else 0) - (10.0 if "SAW" in rms else 0) - (7.0 if "FSTBND" in rms or "BCK" in rms else 0)
-                    
-                    trap_num = u_g["Trap_Num"]
-                    f_tactic = 0.0
-                    if u_g["Trap"] == "vacant": f_tactic += 1.5
-                    if trap_num in [4, 5, 6] and u_o["Split"] > last_5_dist["Split"].median(): f_tactic -= 1.5
-                    if perf == "🔴 Trombador" and trap_num in [1, 2, 3]: f_tactic -= 2.0
-                    if trap_num in [4, 5, 6]: f_tactic -= 1.0
-                    
-                    f_mom = 3.0 if "1" in str(u_o["Fin"]) else 0.0
-                    tot_fatores = f_peso + f_dias + f_rem + f_tactic + f_mom
-                    
-                    block = ("T" in str(u_o["Grade_Str"]).upper()) or (conf < 60)
-                    
-                    res.append({
-                        "Trap": u_g["Trap"], "Trap_Num": trap_num, "Galgo_Original": n, 
-                        "Galgo": f"[BLOQUEADO] {n}" if block else n, 
-                        "Cat": cat_final, "Fatores": round(tot_fatores, 2), 
-                        "Perfil": perf, "Peso": u_o["Peso_Corrida"], "Dias": dias_desc, 
-                        "Split": u_o["Split"], "Time": u_o["CalTm"], "Time_Ajust": time_ajust_mean, 
-                        "M_Split": m_s, "M_Time": m_t, "Ritmo": ritmo, "Recup": rec_med, 
-                        "Confianca": conf, "Block": block
-                    })
-                    
-                if res:
-                    agg = pd.DataFrame(res)
-                    agg["Overall"] = (
-                        calc_prop(agg["Time_Ajust"], 40, 5) + calc_prop(agg["M_Time"], 30, 5) + 
-                        calc_prop(agg["M_Split"], 15, 2) + calc_prop(agg["Ritmo"], 15, 2) + 
-                        agg["Cat"] + agg["P_pts"] + (5 + (agg["Recup"] / 10)).clip(0, 10) + agg["Fatores"]
-                    )
-                    agg = agg.sort_values("Overall", ascending=False).reset_index(drop=True)
-                    
-                    # Atribuir medalhas visuais no Overall
-                    def format_overall(idx, val):
-                        medals = ['🥇', '🥈', '🥉']
-                        m = medals[idx] if idx < 3 else f"{idx+1}°"
-                        return f"{m} · {val:.1f}" if idx < 3 else f"{idx+1}° · {val:.1f}"
-                    
-                    agg["OVERALL_DSP"] = [format_overall(i, r["Overall"]) for i, r in agg.iterrows()]
-                    
-                    # Cabeçalho idêntico à imagem
-                    st.markdown(f"### {meta['pista']} {meta['hora']} (BR {meta['br']})")
-                    st.markdown(f"**Race {meta['num']}** &nbsp;&nbsp;·&nbsp;&nbsp; `{cat_h}` &nbsp;&nbsp;·&nbsp;&nbsp; `{d_h}m`")
-                    st.markdown("---")
-                    
-                    # Classificação Geral (Blocos superiores)
-                    st.markdown("#### Classificação geral")
-                    trap_seq = " - ".join([str(r['Trap']) for _, r in agg.iterrows()])
-                    st.markdown(f"### `{trap_seq}`")
-                    st.markdown("**Post Pick do site:** `5` - `4` - `2`")
-                    
-                    st.markdown("---")
-                    st.markdown("#### Projeção")
-                    
-                    # Tabela de Projeção idêntica (Trap, Galgo, OVERALL, Base/Fatores)
-                    proj_view = pd.DataFrame({
-                        "Trap": agg["Trap"],
-                        "Galgo": agg["Galgo"].str.replace("[BLOQUEADO] ", ""),
-                        "OVERALL": agg["OVERALL_DSP"],
-                        "Base": agg["Overall"].round(1),
-                        "Fatores/Notas": [f"{r['Fatores']:+.1f} Fatores" for _, r in agg.iterrows()]
-                    })
-                    st.dataframe(proj_view, use_container_width=True, hide_index=True)
-                    
-                    # Texto explicativo inferior da projeção
-                    st.caption("Trap 1 vacant. Split, Time e Peso = corrida mais recente em 415m (colunas Split, CalTm e Wght do card). Médias = só corridas de 415m, ponderadas 5-4-3-2-1 pela recência. Recup = (1ª curva - posição final) × 20% nas corridas de 415m com bends. Escala de 5 galgos: piso 10 nas médias. Deslize as tabelas.")
-                    
-                    st.markdown("---")
-                    st.markdown("#### AVB aprovados")
-                    
-                    # Simulador de AVB Aprovados idêntico
-                    elig = agg[~agg["Block"]].reset_index(drop=True)
-                    avb_data = []
-                    if len(elig) >= 2:
-                        avb_data.append({
-                            "AvB": f"{elig.iloc[0]['Trap']} vence {elig.iloc[1]['Trap']}",
-                            "Overall": f"{elig.iloc[0]['Overall']:.1f} vs {elig.iloc[1]['Overall']:.1f}",
-                            "Categoria": f"{elig.iloc[0]['Cat']:.2f} vs {elig.iloc[1]['Cat']:.2f}"
-                        })
-                    if len(elig) >= 3:
-                        avb_data.append({
-                            "AvB": f"{elig.iloc[0]['Trap']} vence {elig.iloc[2]['Trap']}",
-                            "Overall": f"{elig.iloc[0]['Overall']:.1f} vs {elig.iloc[2]['Overall']:.1f}",
-                            "Categoria": f"{elig.iloc[0]['Cat']:.2f} vs {elig.iloc[2]['Cat']:.2f}"
-                        })
-                        
-                    if avb_data:
-                        st.dataframe(pd.DataFrame(avb_data), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Nenhum AVB aprovado com os critérios atuais.")
-                        
-                    # Seção de Observações
-                    st.markdown("---")
-                    st.markdown("#### Observações")
-                    st.markdown("""
-                    - **Reprovados:** Galgos bloqueados ou com recuperação negativa e sem ser Top 1/Rápido caem nas travas de segurança.
-                    - **Confiança:** Avaliada com base nas corridas oficiais na distância exata.
-                    - **Trap vazia:** Ajustes aplicados para vizinhos diretos (Wide / Internos).
-                    - **Perfil:** Considera incidência de interferências (Crd, Bmp, Blk).
-                    """)
-            except Exception as e:
-                st.error(f"Erro ao renderizar layout: {e}")
+                    f_peso = -5.0 if d_p > 2.0 else (-2.0 if
