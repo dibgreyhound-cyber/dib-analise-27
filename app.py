@@ -1,4 +1,4 @@
--*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
 - Extracao: mesmo fluxo do app anterior (link do Racing Post -> blocks.sd?blocks=form)
@@ -41,9 +41,6 @@ CFG = {
 }
 
 # Nomes possiveis dos campos no JSON do Racing Post (primeiro = o que seu app ja usava).
-# Rode o app uma vez e abra "Diagnostico" para ver quais campos foram encontrados.
-
-
 FIELD_MAP = {
     "date":    ["raceTime", "raceDate", "date"],
     "track":   ["trackName", "track"],
@@ -185,7 +182,6 @@ def has_w(rem):
 
 
 def remark_points(rem):
-    """Remarks da corrida oficial mais recente: Early Pace/Led, Clear Run, Slow Away, First Bend Traffic."""
     R = CFG["REMARKS_PTS"]
     toks = [t for t in re.split(r"[,\s]+", str(rem or "").lower()) if t]
     pts, tags = 0.0, []
@@ -206,7 +202,7 @@ def wmean(vals, ws):
 
 
 # =====================================================================
-# EXTRACAO (Racing Post) - mesmo fluxo do app anterior
+# EXTRACAO (Racing Post)
 # =====================================================================
 
 
@@ -219,7 +215,6 @@ HINTS = {
 
 
 def pick_fb(f, k):
-    """Procura pelo FIELD_MAP; se nao achar, tenta adivinhar pelo nome da chave."""
     v = pick(f, FIELD_MAP[k])
     if v is not None or k not in HINTS:
         return v
@@ -257,7 +252,6 @@ GRADE_RE = re.compile(r"^(A\d{1,2}|T\d?|HP|OR|IT|S\d|D\d|B\d|ON\d)$")
 
 
 def descobrir_chaves(dogs):
-    """Descobre pelo CONTEUDO quais chaves do JSON sao a Distancia (coluna Dis) e a Classe (Grade)."""
     vals = {}
     for dog in dogs:
         for f in dog.get("forms", []):
@@ -281,7 +275,6 @@ def descobrir_chaves(dogs):
 
 
 def extrair_dados_racingpost(url):
-    """Retorna (lista_de_galgos, json_bruto) ou (None, None)."""
     try:
         race_id_match = re.search(r"race_id=(\d+)", url)
         r_date_match = re.search(r"r_date=([\d-]+)", url)
@@ -323,7 +316,6 @@ def extrair_dados_racingpost(url):
 
 
 def diagnostico_campos(dogs):
-    """Mostra quais campos logicos foram preenchidos nas corridas lidas."""
     runs = [r for d in dogs for r in d["runs"]]
     rows = []
     for k in ["date", "track", "dist", "grade", "trap", "split", "bends", "fin", "by",
@@ -339,11 +331,10 @@ def diagnostico_campos(dogs):
 # =====================================================================
 
 
-  def oficial(r, ctx):
-    """Corrida oficial (A1 a A11) na distancia exata. T, HP e demais ficam fora."""
+def oficial(r, ctx):
     return (grade_num(r["grade"]) is not None and r["dist"] is not None
             and abs(r["dist"] - ctx["dist"]) < 1
-            and r["caltm"] is not None and r["caltm"] > 0)   # NR/lame (CalTm 0.00) ficam fora
+            and r["caltm"] is not None and r["caltm"] > 0)
 
 
 def peso_pts(v):
@@ -380,7 +371,6 @@ def analisar_galgo(dog, ctx):
     if not R:
         return d
 
-    # Categoria
     pts = [16 - grade_num(r["grade"]) for r in R]
     base = float(np.mean(pts)) if CFG["CAT_BASE_MODE"] == "media" else float(pts[0])
     last_n, today_n = grade_num(R[0]["grade"]), ctx.get("classe_n")
@@ -389,7 +379,6 @@ def analisar_galgo(dog, ctx):
         mod = CFG["CAT_BONUS"] if today_n > last_n else (-CFG["CAT_BONUS"] if today_n < last_n else 0.0)
     d["cat_mod"], d["cat"] = mod, base + mod
 
-    # Peso
     last_w = R[0]["weight"]
     atual = dog.get("peso_atual")
     if atual is None and len(R) > 1:
@@ -398,7 +387,6 @@ def analisar_galgo(dog, ctx):
     d["peso_var"] = abs(atual - last_w) if atual is not None and last_w is not None else None
     d["peso_pts"] = peso_pts(d["peso_var"])
 
-    # Tempos
     d["split"], d["time"] = R[0]["split"], R[0]["caltm"]
     d["peso_ult"] = last_w
     d["msplit"] = wmean([r["split"] for r in R], ws)
@@ -410,7 +398,6 @@ def analisar_galgo(dog, ctx):
     cal = [r["caltm"] for r in R if r["caltm"] is not None]
     d["sd"] = float(np.std(cal)) if len(cal) > 1 else 0.0
 
-    # Recuperacao blindada (so corridas livres)
     recs = []
     for r in R:
         b = bends_digits(r["bends"])
@@ -424,7 +411,6 @@ def analisar_galgo(dog, ctx):
         tag = "Ganhou" if d["rec"] > 0.005 else ("Perdeu" if d["rec"] < -0.005 else "Manteve")
         d["rec_txt"] = f"{d['rec']:+.2f}% ({tag})"
 
-    # Perfil, estilo, posicao media
     n_traf = sum(count_traf(r["remarks"]) for r in R)
     d["n_traf"] = n_traf
     d["perfil"] = "Limpo" if n_traf <= 1 else ("Irregular" if n_traf == 2 else "Trombador")
@@ -442,7 +428,6 @@ def analisar_galgo(dog, ctx):
     fins = [r["fin"] for r in R if r["fin"]]
     d["posmed"] = float(np.mean(fins)) if fins else None
 
-    # Remarks (corrida oficial mais recente) e Momentum
     d["remark_pts"], d["remark_tags"] = remark_points(R[0]["remarks"])
     f0 = R[0]["fin"]
     d["momentum"] = 0.0
@@ -454,7 +439,6 @@ def analisar_galgo(dog, ctx):
 
 
 def h2h_pairs(dogs):
-    """Confronto mais recente por par (mesma data, pista, distancia, classe e WnTm)."""
     res = {}
     for a in dogs:
         for b in dogs:
@@ -482,12 +466,10 @@ def h2h_pairs(dogs):
 
 
 def finalizar(ds, ctx):
-    """Calcula Overall, travas e marcacoes (precisa do conjunto completo de galgos)."""
     ok = [d for d in ds if not d["nd"]]
     vac = [t for t in range(1, CFG["N_CORREDORES"] + 1) if t not in {d["trap"] for d in ds}]
     ctx["vazias"] = vac
 
-    # Base de Velocidade (100 pts)
     def pts_item(key, maxp, d):
         vals = [x[key] for x in ok if x[key] is not None]
         if d[key] is None:
@@ -545,329 +527,4 @@ def finalizar(ds, ctx):
     for d in ds:
         if d["nd"]:
             d["pos"] = None
-    return ok
-
-
-# =====================================================================
-# AVB
-# =====================================================================
-
-
-def forca(V, D, ctx):
-    pp = ctx.get("post_pick", [])
-    f = (V["overall"] - D["overall"])
-    f += 100.0 * ((D["mtime"] or 0) - (V["mtime"] or 0))
-    f += ((V["rec"] or 0) - (D["rec"] or 0)) / 2.0
-    f += (V["cat"] - D["cat"]) * 2.0
-    notes = []
-    if V["estilo"] == "Rápido" and D["estilo"] != "Rápido":
-        f += 5; notes.append("+5 Rápido")
-    key = tuple(sorted([V["name"], D["name"]]))
-    h = ctx["h2h"].get(key)
-    if h and h[0] == V["name"]:
-        f += 5; notes.append("+5 H2H")
-    if V["estilo"] == "Rápido" and D["estilo"] == "Rápido" and V["trap"] in (1, 2, 3):
-        f += 5; notes.append("+5 trap interna")
-    if V["estilo"] == "Fecha forte" and D["estilo"] == "Rápido" and D["trap"] in (1, 2, 3):
-        f -= 5; notes.append("−5 Fecha forte vs Rápido interno")
-    sd = float(np.clip(10.0 * (D["sd"] - V["sd"]), -5, 5))
-    f += sd
-    if abs(sd) >= 0.05:
-        notes.append(f"{sd:+.1f} desvio")
-    if V["trap"] in pp and (D["trap"] not in pp or pp.index(V["trap"]) < pp.index(D["trap"])):
-        f += 5; notes.append("+5 Post Pick")
-    if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]):
-        f += 5; notes.append("+5 Trap Vazia")
-    return f, notes
-
-
-def montar_avbs(rank, ctx):
-    elig = [d for d in rank if d["elegivel"]]
-    elite = {}
-    slots = [(3, 4), (4, 5), (5, 6)]
-    for k, poss in enumerate(slots):
-        if k >= len(elig):
-            break
-        V = elig[k]
-        for p in poss:
-            if p <= len(rank):
-                D = rank[p - 1]
-                if D is not V and D["overall"] < V["overall"]:
-                    elite[(V["name"], D["name"])] = (V, D)
-    alvos = [d for d in rank if d["alvo"]]
-    s1, s2, s3 = [], [], []
-    for (V, D) in elite.values():
-        f, n = forca(V, D, ctx)
-        if D["alvo"]:
-            continue
-        if f >= CFG["FORCA_PRINCIPAL"]:
-            s2.append((V, D, f, n, False))
-        elif f >= CFG["FORCA_SECUNDARIO"]:
-            s3.append((V, D, f, n, False))
-    for A in alvos:
-        for V in elig:
-            if V is A or V["overall"] <= A["overall"]:
-                continue
-            f, n = forca(V, A, ctx)
-            if f >= CFG["FORCA_PRINCIPAL"]:
-                s1.append((V, A, f, n, (V["name"], A["name"]) in elite))
-    for (V, D) in elite.values():
-        if D["alvo"]:
-            f, n = forca(V, D, ctx)
-            if CFG["FORCA_SECUNDARIO"] <= f < CFG["FORCA_PRINCIPAL"]:
-                s3.append((V, D, f, n, False))
-    key = lambda x: -x[2]
-    return sorted(s1, key=key), sorted(s2, key=key), sorted(s3, key=key)
-
-
-# =====================================================================
-# EXIBICAO (estilo do artefato)
-# =====================================================================
-
-
-CSS = """
-<style>
-.dib-wrap{overflow-x:auto;border:1px solid rgba(128,128,128,.35);border-radius:10px;margin:6px 0 14px}
-.dib{border-collapse:separate;border-spacing:0;font-size:13px;width:max-content;min-width:100%}
-.dib th,.dib td{padding:6px 9px;border-bottom:1px solid rgba(128,128,128,.25);white-space:nowrap;text-align:center;vertical-align:middle}
-.dib th{background:rgba(128,128,128,.15);font-weight:600}
-.dib td.l,.dib th.l{text-align:left;font-weight:600}
-.dib .s1{position:sticky;left:0;z-index:2;background:var(--background-color,#fff)}
-.dib .s2{position:sticky;left:46px;z-index:2;background:var(--background-color,#fff);box-shadow:2px 0 0 rgba(128,128,128,.35)}
-.dib td.w{white-space:normal;min-width:200px;text-align:left}
-.g{color:#0b8a3b;font-weight:600}.r{color:#c62828;font-weight:600}
-</style>
-"""
-
-
-def tbl(headers, rows, sticky=True):
-    h = "".join(f"<th class='{'l' if i < 2 else ''}'>{x}</th>" for i, x in enumerate(headers))
-    out = []
-    for row in rows:
-        cells = []
-        for i, c in enumerate(row):
-            cls = ""
-            if sticky and i == 0: cls = " class='s1'"
-            elif sticky and i == 1: cls = " class='s2 l'"
-            cells.append(f"<td{cls}>{c}</td>")
-        out.append("<tr>" + "".join(cells) + "</tr>")
-    return f"<div class='dib-wrap'><table class='dib'><tr>{h}</tr>{''.join(out)}</table></div>"
-
-
-def ranks_low(values):
-    idx = [i for i, v in enumerate(values) if v is not None]
-    out = [None] * len(values)
-    for i in idx:
-        out[i] = 1 + sum(1 for j in idx if round(values[j], 2) < round(values[i], 2))
-    return out
-
-
-def f2(x, n=2):
-    return "n/d" if x is None else f"{x:.{n}f}"
-
-
-def nome_marcado(d):
-    n = html.escape(d["name"])
-    if d.get("bloqueado") or d.get("trial_block"):
-        n = "[BLOQUEADO] " + n
-    if d.get("alvo"):
-        n = "🎯 " + n
-    return n
-
-
-def trap_label(d):
-    return f"{TRAP_EMOJI.get(d['trap'], '')} {d['trap']}"
-
-
-def tabela_projecao(ds):
-    cols = ["split", "time", "tadj", "msplit", "mtime", "ritmo"]
-    rk = {}
-    for c in cols:
-        vals = [None if d["nd"] else d[c] for d in ds]
-        rk[c] = ranks_low(vals)
-    rows = []
-    for i, d in enumerate(ds):
-        if d["nd"]:
-            rows.append([trap_label(d), html.escape(d["name"]), "n/d"] + ["-"] * 15)
-            continue
-
-        def cell(c, n=2):
-            r = rk[c][i]
-            return f"{RANK_EMOJI.get(r, '🔴') if r else ''} {f2(d[c], n)}".strip()
-        fat = "<br>".join(f"{k} {v:+.1f}" for k, v in d["fatores"]) or "-"
-        if d["remark_tags"]:
-            fat += "<br>" + ", ".join(d["remark_tags"]) + f" {d['remark_pts']:+.1f}"
-        perfil_e = {"Limpo": "✅", "Irregular": "⚠️", "Trombador": "🔴"}[d["perfil"]]
-        medal = MEDALS.get(d["pos"], f"{d['pos']}º")
-        rows.append([
-            trap_label(d), nome_marcado(d), f"{medal} {d['overall']:.2f}",
-            f"{d['cat']:.2f}" + (f" ({d['cat_mod']:+.0f})" if d.get("cat_mod") else ""),
-            f"<span style='white-space:normal'>{fat}</span>",
-            f"{perfil_e} {d['perfil']} ({d['n_traf']})", d["hist"], f2(d["posmed"], 1),
-            f"{f2(d['peso'], 1)} ({d['peso_pts']:+.0f})", f"{d['dias']} ({d['dias_pts']:+.0f})",
-            cell("split"), cell("time"), cell("tadj"), cell("msplit"), cell("mtime"), cell("ritmo"),
-            d["rec_txt"], f"{d['conf']:.0f}%",
-        ])
-    heads = ["Trap", "Galgo", "Overall", "Categoria", "Fatores", "Perfil", "Histórico", "Posição Med.",
-             "Peso", "Dias", "Split", "Time", "Time Ajustado", "Média Split", "Média Time",
-             "Ritmo final", "Recup. Média", "Confiança"]
-    return tbl(heads, rows)
-
-
-def classificacao(rank):
-    partes = []
-    for d in rank:
-        m = MEDALS.get(d["pos"], f"{d['pos']}º")
-        partes.append(f"{m} {TRAP_EMOJI.get(d['trap'], '')} {d['trap']}")
-    return " > ".join(partes)
-
-
-def stack(vv, dv, fmt, better="low", sign=True):
-    """Vencedor em cima (com diferenca entre parenteses), desafiante embaixo."""
-    if vv is None or dv is None:
-        return f"{'n/d' if vv is None else fmt(vv)}<br>{'n/d' if dv is None else fmt(dv)}"
-    diff = vv - dv
-    good = (diff < 0) if better == "low" else (diff > 0)
-    cls = "" if abs(diff) < 1e-9 or better is None else ("g" if good else "r")
-    dtxt = f" ({diff:+.2f})" if sign else ""
-    return f"<span class='{cls}'>{fmt(vv)}{dtxt}</span><br>{fmt(dv)}"
-
-
-def tabela_avb(lista, titulo, ctx):
-    st.markdown(f"#### {titulo}")
-    if not lista:
-        st.info("Nenhum AVB nesta categoria.")
-        return
-    rows = []
-    for (V, D, f, notes, star) in lista:
-        pv = lambda x: f"{x:.2f}"
-        rows.append([
-            f"{'⭐ ' if star else ''}{trap_label(V)} vence {trap_label(D)}<br>"
-            f"<span style='font-weight:400'>{html.escape(V['name'])} vs {html.escape(D['name'])}</span>",
-            stack(V["overall"], D["overall"], pv, "high"),
-            stack(V["cat"], D["cat"], pv, "high"),
-            f"{V['perfil']}<br>{D['perfil']}",
-            f"{V['hist']}<br>{D['hist']}",
-            stack(V["posmed"], D["posmed"], lambda x: f"{x:.1f}", "low"),
-            stack(V["peso"], D["peso"], lambda x: f"{x:.1f}", None),
-            f"{V['dias']}<br>{D['dias']}",
-            stack(V["split"], D["split"], pv, "low"),
-            stack(V["time"], D["time"], pv, "low"),
-            stack(V["tadj"], D["tadj"], pv, "low"),
-            stack(V["msplit"], D["msplit"], pv, "low"),
-            stack(V["mtime"], D["mtime"], pv, "low"),
-            stack(V["ritmo"], D["ritmo"], pv, "low"),
-            f"{V['rec_txt']}<br>{D['rec_txt']}",
-            f"{V['conf']:.0f}%<br>{D['conf']:.0f}%",
-            f"<b>{f:.2f}</b><br><span style='font-size:11px;white-space:normal'>{', '.join(notes)}</span>",
-        ])
-    heads = ["AvB", "Overall", "Categoria", "Perfil", "Histórico", "Posição Med.", "Peso", "Dias",
-             "Split", "Time", "Time Ajustado", "Média Split", "Média Tempo", "Ritmo final",
-             "Recup. Média", "Confiança", "Força"]
-    st.markdown(tbl(heads, rows), unsafe_allow_html=True)
-
-
-def observacoes(rank):
-    out = []
-    for d in rank:
-        pos, neg = [], []
-        if d["perfil"] == "Limpo": pos.append("perfil limpo")
-        if d["perfil"] == "Trombador": neg.append(f"trombador ({d['n_traf']} ocorrências)")
-        if d["rec"] is not None and d["rec"] > 0: pos.append(f"recupera posições ({d['rec']:+.1f}%)")
-        if d["rec"] is not None and d["rec"] <= 0: neg.append(f"não recupera ({d['rec']:+.1f}%)")
-        pos += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v > 0]
-        neg += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v < 0]
-        if d["remark_tags"]: (neg if d["remark_pts"] < 0 else pos).append(", ".join(d["remark_tags"]))
-        if d["bloqueado"]: neg.append(f"confiança {d['conf']:.0f}% (bloqueado como vencedor)")
-        if d["trial_block"]: neg.append("última corrida foi trial (bloqueado como vencedor)")
-        if d["alvo"]: neg.append("alvo: Média Split fora do Top 3 e Recup ≤ 0")
-        if d["dias_pts"] or d["peso_pts"]: neg.append(f"dias {d['dias']} ({d['dias_pts']:+.0f}), peso Δ{f2(d['peso_var'],1)} ({d['peso_pts']:+.0f})")
-        out.append(f"- **{trap_label(d)} {d['name']}** — ➕ {'; '.join(pos) or '-'} | ➖ {'; '.join(neg) or '-'}")
-    return "\n".join(out)
-
-
-def hora_br(hhmm):
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
-    if not m:
-        return None
-    t = datetime(2000, 1, 1, int(m.group(1)), int(m.group(2))) - timedelta(hours=3)
-    h = t.hour % 12 or 12
-    return f"{h}:{t.minute:02d}"
-
-
-# =====================================================================
-# APP
-# =====================================================================
-
-
-def mostrar_diagnostico(dogs, meta):
-    st.markdown("**Campos lidos do JSON** (se algum estiver 0, ajuste o `FIELD_MAP` no topo do código):")
-    st.dataframe(diagnostico_campos(dogs), use_container_width=True, hide_index=True)
-    st.markdown("**Chaves da primeira corrida do primeiro galgo (JSON bruto):**")
-    first = meta["raw_first"]
-    st.json(first.get("forms", [{}])[0] if first.get("forms") else first)
-    linhas = [{"Galgo": d["name"], "Trap": d["trap"], **{k: r[k] for k in
-              ["date_str", "track", "dist", "grade", "split", "bends", "fin", "by", "wntm", "gng",
-               "weight", "remarks", "caltm"]}} for d in dogs for r in d["runs"]]
-    st.dataframe(pd.DataFrame(linhas), use_container_width=True)
-
-
-def main():
-    st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
-    st.title("🐾 Análise DIB 2.7")
-    st.markdown(CSS, unsafe_allow_html=True)
-
-    with st.sidebar:
-        st.header("Dados da corrida")
-        pista = st.text_input("Pista", "")
-        hora = st.text_input("Horário da pista (ex.: 11:41)", "")
-        race = st.text_input("Race nº", "")
-        classe = st.text_input("Classe de hoje (ex.: A5)", "")
-        dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 3-1-6)", "")
-
-    st.subheader("🔗 Cole o link da corrida do Racing Post")
-    url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
-
-    if st.button("Analisar Corrida", type="primary") and url:
-        dogs, meta = extrair_dados_racingpost(url)
-        if dogs:
-            st.session_state["dib_data"] = (dogs, meta)   # mantém o resultado ao mexer na barra lateral
-
-    if "dib_data" in st.session_state:
-        dogs, meta = st.session_state["dib_data"]
-        all_runs = [r for d in dogs for r in d["runs"] if r["dist"]]
-        dist = float(dist_in) if dist_in else (pd.Series([r["dist"] for r in all_runs]).mode().iloc[0] if all_runs else 0)
-        if not dist:
-            st.error("Não consegui detectar a distância. Preencha na barra lateral. "
-                     "Abaixo estão os campos que vieram do Racing Post:")
-            mostrar_diagnostico(dogs, meta)
-            return
-        today = parse_date(meta["r_date"])
-        ctx = {"dist": dist, "today": today, "classe_n": grade_num(classe),
-               "post_pick": [int(x) for x in re.findall(r"\d", pp_in)]}
-        if classe and not ctx["classe_n"]:
-            st.warning("Classe de hoje não reconhecida (use A1 a A11). O ajuste de classe foi ignorado.")
-        ds = [analisar_galgo(d, ctx) for d in dogs]
-        rank = finalizar(ds, ctx)
-        ds.sort(key=lambda d: d["trap"])
-
-        tab_a, tab_d = st.tabs(["📋 Análise", "🔎 Diagnóstico e dados brutos"])
-        with tab_a:
-            br = hora_br(hora)
-            tit = f"{pista} {hora} (BR {br})" if br else pista
-            st.markdown(f"### {tit} · Race {race} · {classe} · {int(dist)}m · POST PICK: {pp_in or '-'}")
-            st.markdown("#### Planilha de Projeção")
-            st.markdown(tabela_projecao(ds), unsafe_allow_html=True)
-            st.markdown("**Classificação geral:** " + classificacao(rank))
-            s1, s2, s3 = montar_avbs(rank, ctx)
-            tabela_avb(s1, "1ª Planilha — AVB do Alvo 🎯 (Força ≥ 50)", ctx)
-            tabela_avb(s2, "2ª Planilha — AVB Principal (Elite, Força ≥ 50)", ctx)
-            tabela_avb(s3, "3ª Planilha — AVB Secundário (Elite, Força 40,0 a 49,9)", ctx)
-            st.markdown("#### Observações")
-            st.markdown(observacoes(rank))
-        with tab_d:
-            mostrar_diagnostico(dogs, meta)
-
-if __name__ == "__main__":
-    main()                  
+    retu
