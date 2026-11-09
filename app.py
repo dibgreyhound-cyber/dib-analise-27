@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao robusta de metadados (Pista, Horario, Race, Classe, Post Pick)
+- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick)
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -62,7 +62,7 @@ RANK_EMOJI = {1: "🟢", 2: "🟡", 3: "⚪", 4: "🔵", 5: "🟠", 6: "🔴"}
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 # =====================================================================
-# UTILIDADES DE LEITURA E EXTRACAO
+# UTILIDADES DE LEITURA E EXTRACAO CIRURGICA
 # =====================================================================
 
 def pick(d, keys, default=None):
@@ -177,7 +177,7 @@ def wmean(vals, ws):
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
 # =====================================================================
-# EXTRACAO (Racing Post)
+# EXTRACAO (Racing Post - Abordagem Cirurgica)
 # =====================================================================
 
 HINTS = {
@@ -243,6 +243,19 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
+def extrair_horario_corrida(info_card, data):
+    chaves = ["offTime", "displayTime", "raceTime", "scheduledTime", "time"]
+    for src in [info_card, data]:
+        if not isinstance(src, dict):
+            continue
+        for k in chaves:
+            val = src.get(k)
+            if val:
+                m = re.search(r"(\d{1,2}:\d{2})", str(val))
+                if m:
+                    return m.group(1)
+    return ""
+
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
@@ -259,38 +272,8 @@ def extrair_metadados_json(data, info_card, dogs):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    # 2. Horário da Prova
-    t_raw = None
-    for src in [info_card, data]:
-        if isinstance(src, dict):
-            for k in ["offTime", "displayTime", "time", "raceTime", "scheduledTime"]:
-                val = src.get(k)
-                if val:
-                    m = re.search(r"(\d{1,2}:\d{2})", str(val))
-                    if m:
-                        t_raw = m.group(1)
-                        break
-        if t_raw: break
-
-    if not t_raw:
-        def achar_hora(obj):
-            nonlocal t_raw
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if isinstance(v, str) and not t_raw:
-                        m = re.search(r"(\d{1,2}:\d{2})", v)
-                        if m:
-                            t_raw = m.group(1)
-                    elif isinstance(v, (dict, list)):
-                        achar_hora(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    achar_hora(item)
-        achar_hora(data)
-        achar_hora(info_card)
-
-    if t_raw:
-        info["hora"] = t_raw
+    # 2. Horário da Prova (Uso da função cirúrgica recomendada)
+    info["hora"] = extrair_horario_corrida(info_card, data)
 
     # 3. Número da Race
     r_num = None
@@ -334,23 +317,6 @@ def extrair_metadados_json(data, info_card, dogs):
                         pp_val = m.group(1)
                         break
         if pp_val: break
-
-    if not pp_val:
-        def achar_pp(obj):
-            nonlocal pp_val
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if isinstance(v, str) and not pp_val:
-                        m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", v)
-                        if m:
-                            pp_val = m.group(1)
-                    elif isinstance(v, (dict, list)):
-                        achar_pp(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    achar_pp(item)
-        achar_pp(data)
-        achar_pp(info_card)
 
     if pp_val:
         info["post_pick"] = pp_val.strip().replace("/", "-").replace(".", "-")
@@ -658,22 +624,19 @@ def forca(V, D, ctx):
 
 def avb_valido(V, D, ctx):
     """
-    Critérios para o galgo vencedor (V) no AvB:
+    Critérios obrigatórios para o galgo vencedor (V) no AvB:
     1. Média Split no Top 3 da prova
     2. Média Split menor (mais rápida) do que a do desafiante (D)
     3. Recuperação Média maior do que a do desafiante (D)
     """
     top3_ms = ctx.get("top3_ms", set())
     
-    # 1. Média Split no Top 3
     if V["name"] not in top3_ms:
         return False
         
-    # 2. Média Split menor que a do desafiante
     if V["msplit"] is None or D["msplit"] is None or V["msplit"] >= D["msplit"]:
         return False
         
-    # 3. Recuperação Média maior que a do desafiante
     if V["rec"] is None or D["rec"] is None or V["rec"] <= D["rec"]:
         return False
         
