@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick) do objeto race
-- Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
-- Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
 import re
 import html
@@ -19,24 +16,24 @@ import streamlit as st
 # =====================================================================
 
 CFG = {
-    "N_RUNS": 5,                       # ultimas corridas lidas por galgo
-    "WEIGHTS": [5, 4, 3, 2, 1],        # Time Decay
-    "POND_MODE": "validas",            # "validas": 5,4,3.. so entre corridas validas | "posicao": peso pela posicao entre as 5
-    "CAT_BASE_MODE": "media",          # "media" das classes validas | "ultima" corrida valida
-    "CAT_BONUS": 2.0,                  # desceu de classe +2 / subiu -2
-    "N_CORREDORES": 6,                 # total de corredores para a % de Recup
+    "N_RUNS": 5,
+    "WEIGHTS": [5, 4, 3, 2, 1],
+    "POND_MODE": "validas",
+    "CAT_BASE_MODE": "media",
+    "CAT_BONUS": 2.0,
+    "N_CORREDORES": 6,
     "TRAFFIC_ADJ": {"baulk": 0.20, "crd": 0.10, "bmp": 0.10, "fcd": 0.10},
-    "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},        # Base de Velocidade (100)
-    "VEL_MIN": 0.0,                    # pontos do pior em cada item
+    "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},
+    "VEL_MIN": 0.0,
     "PERFIL_PTS": {"Limpo": 10.0, "Irregular": 5.0, "Trombador": 2.5},
-    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)),  # 0 a 10 pts
+    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)),
     "REMARKS_PTS": {"early": 1.5, "clear": 5.0, "slowaway": -10.0, "firstbend": -7.0},
     "TRAP_VAZIA": 1.5, "ESMAGAMENTO": -1.5, "TRAFEGO_SEVERO": -2.0, "WIDE": -1.0,
     "H2H": 1.0, "H2H_MARGEM_GRANDE": 3.0, "H2H_GRANDE": 2.0,
     "MOMENTUM_VITORIA": 3.0, "MOMENTUM_DERROTA": -2.0, "DERROTA_POS_MIN": 5,
-    "PESO_DIAS_NO_OVERALL": True,      # soma os pontos de Peso e Dias no Overall
+    "PESO_DIAS_NO_OVERALL": True,
     "FORCA_PRINCIPAL": 50.0, 
-    "FORCA_SECUNDARIO": 45.0,          # Intervalo 45.0 a 49.9
+    "FORCA_SECUNDARIO": 45.0,
     "CONF_MIN_VENCEDOR": 60.0,
 }
 
@@ -247,77 +244,90 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
+# --- NOVA FUNÇÃO DE BUSCA INTELIGENTE ---
+def buscar_dado_especifico(obj, chaves_alvo, ignorar_chaves=None):
+    if ignorar_chaves is None:
+        ignorar_chaves = set()
+    
+    if isinstance(obj, dict):
+        # 1. Tenta achar no nível atual
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if kl in chaves_alvo and v not in (None, "", []):
+                return v
+        
+        # 2. Se não achou, desce um nível (ignorando chaves proibidas)
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if kl in ignorar_chaves:
+                continue
+            res = buscar_dado_especifico(v, chaves_alvo, ignorar_chaves)
+            if res is not None:
+                return res
+                
+    elif isinstance(obj, list):
+        for item in obj:
+            res = buscar_dado_especifico(item, chaves_alvo, ignorar_chaves)
+            if res is not None:
+                return res
+    return None
+
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    # Busca recursiva (varre todo o JSON independente do nível de aninhamento)
-    def buscar_chave(obj, chaves_alvo):
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if str(k).lower() in chaves_alvo and v not in (None, "", []):
-                    return v
-                res = buscar_chave(v, chaves_alvo)
-                if res is not None:
-                    return res
-        elif isinstance(obj, list):
-            for item in obj:
-                res = buscar_chave(item, chaves_alvo)
-                if res is not None:
-                    return res
-        return None
-
-    fontes = [info_card, data]
+    # O que NÃO queremos que a busca vasculhe (dados dos cães)
+    ignorar = {"forms", "dogs", "runs", "results", "entries"}
 
     # 1. Pista
-    pista = buscar_chave(fontes, {"trackname", "track", "meetingname", "coursename", "venue"})
-    if pista:
-        info["pista"] = str(pista).strip()
+    p = buscar_dado_especifico([info_card, data], {"trackname", "track", "coursename", "meetingname", "venue"}, ignorar)
+    if p:
+        info["pista"] = str(p).strip()
     elif dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
-    # 2. Horário da Prova
-    t_raw = buscar_chave(fontes, {"offtime", "displaytime", "time", "racetime", "scheduledtime", "race_time"})
-    if t_raw:
-        s_t = str(t_raw).strip()
+    # 2. Horário
+    t = buscar_dado_especifico([info_card, data], {"offtime", "displaytime", "racetime", "starttime", "time"}, ignorar)
+    if t:
+        s_t = str(t).strip()
+        # Tenta achar padrão HH:MM
         m = re.search(r"(\d{1,2}:\d{2})", s_t)
         if m:
             info["hora"] = m.group(1)
         else:
-            m2 = re.fullmatch(r"(\d{2})(\d{2})", s_t) # Caso venha "1922"
+            # Tenta achar padrão HHMM (ex: 1922)
+            m2 = re.search(r"\b(\d{3,4})\b", s_t)
             if m2:
-                info["hora"] = f"{m2.group(1)}:{m2.group(2)}"
+                h = m2.group(1).zfill(4)
+                info["hora"] = f"{h[:2]}:{h[2:]}"
 
     # 3. Número da Race
-    r_num = buscar_chave(fontes, {"racenum", "racenumber", "rnum", "racenumberdesc", "number", "racename"})
-    if r_num:
-        m = re.search(r"(\d+)", str(r_num))
+    r = buscar_dado_especifico([info_card, data], {"racenum", "racenumber", "rnum"}, ignorar)
+    if r:
+        m = re.search(r"(\d+)", str(r))
         if m:
             info["race"] = m.group(1)
-        else:
-            info["race"] = str(r_num).replace("Race", "").strip()
 
-    # 4. Classe (Grade)
-    grade = buscar_chave(fontes, {"raceclass", "grade", "class", "raceclassdesc", "racegrade", "race_class"})
-    if grade:
-        info["classe"] = str(grade).strip().upper()
+    # 4. Classe
+    c = buscar_dado_especifico([info_card, data], {"raceclass", "racegrade", "class", "grade", "raceclassdesc"}, ignorar)
+    if c:
+        info["classe"] = str(c).strip().upper()
     elif dogs and dogs[0].get("runs"):
         runs_sorted = sorted(dogs[0]["runs"], key=lambda x: x["date"] or datetime.min, reverse=True)
         if runs_sorted:
             info["classe"] = str(runs_sorted[0].get("grade", "")).strip().upper()
 
     # 5. Post Pick
-    pp = buscar_chave(fontes, {"postpick", "post_pick", "tips", "tip", "postpicks", "selection", "picks"})
+    pp = buscar_dado_especifico([info_card, data], {"postpick", "post_pick", "tips", "tip", "postpicks", "picks", "selection"}, ignorar)
     if pp:
         pp_text = ""
         if isinstance(pp, list):
-            if len(pp) > 0:
-                if all(str(x).isdigit() for x in pp):
-                    pp_text = "".join(str(x) for x in pp)
-                else:
-                    pp_text = str(pp[0])
+            nums = [str(x) for x in pp if str(x).isdigit()]
+            if nums:
+                pp_text = "".join(nums)
         else:
             pp_text = str(pp)
         
+        # Procura por 3 números separados ou juntos
         m = re.search(r"([1-6])[-/. ]*([1-6])[-/. ]*([1-6])", pp_text)
         if m:
             info["post_pick"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -896,17 +906,11 @@ def main():
     st.subheader("🔗 Cole o link da corrida do Racing Post")
     url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
 
-    # Inicializando session_state (formatado para evitar erros de indentação)
-    if "s_pista" not in st.session_state:
-        st.session_state["s_pista"] = ""
-    if "s_hora" not in st.session_state:
-        st.session_state["s_hora"] = ""
-    if "s_race" not in st.session_state:
-        st.session_state["s_race"] = ""
-    if "s_classe" not in st.session_state:
-        st.session_state["s_classe"] = ""
-    if "s_pp" not in st.session_state:
-        st.session_state["s_pp"] = ""
+    if "s_pista" not in st.session_state: st.session_state["s_pista"] = ""
+    if "s_hora" not in st.session_state: st.session_state["s_hora"] = ""
+    if "s_race" not in st.session_state: st.session_state["s_race"] = ""
+    if "s_classe" not in st.session_state: st.session_state["s_classe"] = ""
+    if "s_pp" not in st.session_state: st.session_state["s_pp"] = ""
 
     if st.button("Analisar Corrida", type="primary") and url:
         dogs, meta, meta_info = extrair_dados_racingpost(url)
