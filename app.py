@@ -253,29 +253,18 @@ def extrair_metadados_json(data, info_card, dogs):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    # 2. Horário da Prova (busca estrita por displayTime ou formato HH:MM limpo)
+    # 2. Horário da Prova (Procura em displayTime, offTime ou extrai do campo raceTime/time)
     t_raw = None
     for src in [info_card, data]:
         if isinstance(src, dict):
-            for k in ["displayTime", "offTime", "time"]:
+            for k in ["displayTime", "offTime", "time", "raceTime"]:
                 val = src.get(k)
-                if val and isinstance(val, str) and re.search(r"^\d{1,2}:\d{2}$", val.strip()):
-                    t_raw = val.strip()
-                    break
+                if val and isinstance(val, str) and re.search(r"\d{1,2}:\d{2}", val):
+                    m_h = re.search(r"(\d{1,2}:\d{2})", val)
+                    if m_h:
+                        t_raw = m_h.group(1)
+                        break
         if t_raw: break
-
-    if not t_raw:
-        for src in [info_card, data]:
-            if isinstance(src, dict):
-                for k in ["displayTime", "offTime", "time", "raceTime"]:
-                    val = src.get(k)
-                    if val and re.search(r"\d{1,2}:\d{2}", str(val)):
-                        m_h = re.search(r"(\d{1,2}:\d{2})", str(val))
-                        if m_h:
-                            t_raw = m_h.group(1)
-                            break
-            if t_raw: break
-
     if t_raw:
         info["hora"] = t_raw
 
@@ -306,39 +295,30 @@ def extrair_metadados_json(data, info_card, dogs):
         grade = dogs[0]["runs"][0].get("grade")
     info["classe"] = str(grade or "").strip().upper()
 
-    # 5. Post Pick (Filtro estrito para traps de 1 a 6 separados por hífen/barra, evitando datas)
+    # 5. Post Pick (Varredura estrita de post-pick sem pegar odds ou datas)
     pp_val = None
     for src in [info_card, data]:
         if isinstance(src, dict):
-            for k in ["postPick", "post_pick", "tips", "comment", "raceTitle", "summary", "heading"]:
+            # Procura chave direta de post pick se existir
+            for k in ["postPick", "post_pick"]:
                 val = src.get(k)
-                if val and isinstance(val, str):
-                    # Procura padrão estrito de post pick ex: 2-4-3 ou 1/2/3 (apenas números de traps 1 a 6)
-                    m_pp = re.search(r"\b([1-6][-/][1-6](?:[-/][1-6])*)\b", val)
-                    if m_pp:
-                        pp_val = m_pp.group(1)
-                        break
-        if pp_val: break
-
-    if not pp_val:
-        def achar_pp(obj):
-            nonlocal pp_val
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if isinstance(v, str) and not pp_val:
-                        m_pp = re.search(r"\b([1-6][-/][1-6](?:[-/][1-6])*)\b", v)
+                if val:
+                    pp_val = str(val)
+                    break
+            if pp_val: break
+            
+            # Se não, varre textos procurando explicitamente por "post pick" ou formato de traps (ex: 2-4-3)
+            for k, v in src.items():
+                if isinstance(v, str):
+                    if "post" in k.lower() or "pick" in k.lower() or "post" in v.lower():
+                        m_pp = re.search(r"([1-6][-/.][1-6][-/.][1-6])", v)
                         if m_pp:
                             pp_val = m_pp.group(1)
-                    elif isinstance(v, (dict, list)):
-                        achar_pp(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    achar_pp(item)
-        achar_pp(data)
-        achar_pp(info_card)
+                            break
+        if pp_val: break
 
     if pp_val:
-        info["post_pick"] = str(pp_val).strip()
+        info["post_pick"] = pp_val.strip()
 
     return info
 
