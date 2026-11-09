@@ -15,9 +15,8 @@ import requests
 import streamlit as st
 
 # =====================================================================
-# CONFIGURACAO (ajuste aqui sem mexer no resto do codigo)
+# CONFIGURACAO
 # =====================================================================
-
 
 CFG = {
     "N_RUNS": 5,                       # ultimas corridas lidas por galgo
@@ -40,7 +39,6 @@ CFG = {
     "CONF_MIN_VENCEDOR": 60.0,
 }
 
-# Nomes possiveis dos campos no JSON do Racing Post (primeiro = o que seu app ja usava).
 FIELD_MAP = {
     "date":    ["raceTime", "raceDate", "date"],
     "track":   ["trackName", "track"],
@@ -58,23 +56,19 @@ FIELD_MAP = {
     "caltm":   ["calcRTimes", "calTm", "calcTime"],
 }
 
-
 TRAP_EMOJI = {1: "🟥", 2: "🟦", 3: "⬜", 4: "⬛", 5: "🟧", 6: "🔳"}
 RANK_EMOJI = {1: "🟢", 2: "🟡", 3: "⚪", 4: "🔵", 5: "🟠", 6: "🔴"}
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-
 # =====================================================================
 # UTILIDADES DE LEITURA
 # =====================================================================
-
 
 def pick(d, keys, default=None):
     for k in keys:
         if isinstance(d, dict) and k in d and d[k] not in (None, ""):
             return d[k]
     return default
-
 
 def to_float(x):
     if x is None:
@@ -85,20 +79,16 @@ def to_float(x):
     except Exception:
         return None
 
-
 def going_offset(g):
-    """Gng em centesimos de segundo: +40 -> 0.40. N/vazio -> 0."""
     s = str(g or "").strip().upper()
     if s in ("", "N", "NORMAL", "NONE", "NAN"):
         return 0.0
     v = to_float(s)
     return 0.0 if v is None else v / 100.0
 
-
 def fin_num(x):
     m = re.search(r"\d+", str(x or ""))
     return int(m.group()) if m else None
-
 
 def parse_lengths(x):
     if x in (None, ""):
@@ -116,15 +106,12 @@ def parse_lengths(x):
     except Exception:
         return None
 
-
 def bends_digits(b):
     return [int(c) for c in str(b or "") if c.isdigit()]
-
 
 def grade_num(g):
     m = re.fullmatch(r"A(\d{1,2})", str(g or "").strip().upper())
     return int(m.group(1)) if m else None
-
 
 def parse_date(s):
     if not s:
@@ -137,13 +124,8 @@ def parse_date(s):
             pass
     return None
 
-
-# ---- remarks ----
-
-
 RE_TRAF = re.compile(r"(crd|bmp|blk)")
 RE_NOFREE = re.compile(r"(crd|bmp|blk|baulk|fcd-?ck|evch|mvdoff)")
-
 
 def parts_of(rem):
     for tok in re.split(r"[,\s]+", str(rem or "").lower()):
@@ -152,10 +134,8 @@ def parts_of(rem):
                 if p:
                     yield p
 
-
 def count_traf(rem):
     return sum(1 for p in parts_of(rem) if RE_TRAF.search(p))
-
 
 def traffic_penalty(rem):
     s = str(rem or "").lower()
@@ -165,10 +145,8 @@ def traffic_penalty(rem):
                 CFG["TRAFFIC_ADJ"][k] for k in ("crd", "bmp", "fcd") if k in s)
     return 0.0
 
-
 def not_free(rem):
     return bool(RE_NOFREE.search(str(rem or "").lower()))
-
 
 def first_bend_traffic(rem):
     s = str(rem or "").lower()
@@ -176,10 +154,8 @@ def first_bend_traffic(rem):
         return True
     return any(RE_TRAF.search(p) and "1" in re.findall(r"\d", p) for p in parts_of(rem))
 
-
 def has_w(rem):
     return any(re.fullmatch(r"w\d*", t) for t in re.split(r"[,\-&/\s]+", str(rem or "").lower()) if t)
-
 
 def remark_points(rem):
     R = CFG["REMARKS_PTS"]
@@ -195,16 +171,13 @@ def remark_points(rem):
         pts += R["firstbend"]; tags.append("First Bend Traffic")
     return pts, tags
 
-
 def wmean(vals, ws):
     pairs = [(v, w) for v, w in zip(vals, ws) if v is not None]
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
-
 # =====================================================================
 # EXTRACAO (Racing Post)
 # =====================================================================
-
 
 HINTS = {
     "dist": (("dist", "metre", "meter"), ("btn", "beat", "by")),
@@ -212,7 +185,6 @@ HINTS = {
     "by": (("btn", "beaten"), ()),
     "wntm": (("win", "time"), ()),
 }
-
 
 def pick_fb(f, k):
     v = pick(f, FIELD_MAP[k])
@@ -225,7 +197,6 @@ def pick_fb(f, k):
         if ok and not any(x in kl for x in exc) and val not in (None, ""):
             return val
     return None
-
 
 def norm_run(f):
     g = lambda k: pick_fb(f, k)
@@ -247,9 +218,7 @@ def norm_run(f):
         "caltm": to_float(g("caltm")),
     }
 
-
 GRADE_RE = re.compile(r"^(A\d{1,2}|T\d?|HP|OR|IT|S\d|D\d|B\d|ON\d)$")
-
 
 def descobrir_chaves(dogs):
     vals = {}
@@ -272,7 +241,6 @@ def descobrir_chaves(dogs):
             if k not in FIELD_MAP["grade"]:
                 FIELD_MAP["grade"].insert(0, k)
             break
-
 
 def extrair_dados_racingpost(url):
     try:
@@ -314,7 +282,6 @@ def extrair_dados_racingpost(url):
         st.error(f"Erro: {e}")
         return None, None
 
-
 def diagnostico_campos(dogs):
     runs = [r for d in dogs for r in d["runs"]]
     rows = []
@@ -325,23 +292,19 @@ def diagnostico_campos(dogs):
                      "Preenchido em": f"{n}/{len(runs)} corridas"})
     return pd.DataFrame(rows)
 
-
 # =====================================================================
 # CALCULO DO DIB 2.7
 # =====================================================================
-
 
 def oficial(r, ctx):
     return (grade_num(r["grade"]) is not None and r["dist"] is not None
             and abs(r["dist"] - ctx["dist"]) < 1
             and r["caltm"] is not None and r["caltm"] > 0)
 
-
 def peso_pts(v):
     if v is None:
         return 0.0
     return -5.0 if v >= 2.0 else (-2.0 if v >= 1.1 else 0.0)
-
 
 def dias_pts(d):
     if d is None:
@@ -353,7 +316,6 @@ def dias_pts(d):
     if d <= 45:
         return -3.0
     return -5.0
-
 
 def analisar_galgo(dog, ctx):
     runs = sorted(dog["runs"], key=lambda r: r["date"] or datetime.min, reverse=True)[:CFG["N_RUNS"]]
@@ -437,7 +399,6 @@ def analisar_galgo(dog, ctx):
         d["momentum"] = CFG["MOMENTUM_DERROTA"]
     return d
 
-
 def h2h_pairs(dogs):
     res = {}
     for a in dogs:
@@ -463,7 +424,6 @@ def h2h_pairs(dogs):
                 win, lose = (a, b) if ra["fin"] < rb["fin"] else (b, a)
                 res[(a["name"], b["name"])] = (win["name"], lose["name"], margem)
     return res
-
 
 def finalizar(ds, ctx):
     ok = [d for d in ds if not d["nd"]]
@@ -529,11 +489,9 @@ def finalizar(ds, ctx):
             d["pos"] = None
     return ok
 
-
 # =====================================================================
 # AVB
 # =====================================================================
-
 
 def forca(V, D, ctx):
     pp = ctx.get("post_pick", [])
@@ -561,7 +519,6 @@ def forca(V, D, ctx):
     if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]):
         f += 5; notes.append("+5 Trap Vazia")
     return f, notes
-
 
 def montar_avbs(rank, ctx):
     elig = [d for d in rank if d["elegivel"]]
@@ -601,11 +558,9 @@ def montar_avbs(rank, ctx):
     key = lambda x: -x[2]
     return sorted(s1, key=key), sorted(s2, key=key), sorted(s3, key=key)
 
-
 # =====================================================================
 # EXIBICAO
 # =====================================================================
-
 
 CSS = """
 <style>
@@ -621,7 +576,6 @@ CSS = """
 </style>
 """
 
-
 def tbl(headers, rows, sticky=True):
     h = "".join(f"<th class='{'l' if i < 2 else ''}'>{x}</th>" for i, x in enumerate(headers))
     out = []
@@ -635,7 +589,6 @@ def tbl(headers, rows, sticky=True):
         out.append("<tr>" + "".join(cells) + "</tr>")
     return f"<div class='dib-wrap'><table class='dib'><tr>{h}</tr>{''.join(out)}</table></div>"
 
-
 def ranks_low(values):
     idx = [i for i, v in enumerate(values) if v is not None]
     out = [None] * len(values)
@@ -643,10 +596,8 @@ def ranks_low(values):
         out[i] = 1 + sum(1 for j in idx if round(values[j], 2) < round(values[i], 2))
     return out
 
-
 def f2(x, n=2):
     return "n/d" if x is None else f"{x:.{n}f}"
-
 
 def nome_marcado(d):
     n = html.escape(d["name"])
@@ -656,10 +607,8 @@ def nome_marcado(d):
         n = "🎯 " + n
     return n
 
-
 def trap_label(d):
     return f"{TRAP_EMOJI.get(d['trap'], '')} {d['trap']}"
-
 
 def tabela_projecao(ds):
     cols = ["split", "time", "tadj", "msplit", "mtime", "ritmo"]
@@ -695,14 +644,12 @@ def tabela_projecao(ds):
              "Ritmo final", "Recup. Média", "Confiança"]
     return tbl(heads, rows)
 
-
 def classificacao(rank):
     partes = []
     for d in rank:
         m = MEDALS.get(d["pos"], f"{d['pos']}º")
         partes.append(f"{m} {TRAP_EMOJI.get(d['trap'], '')} {d['trap']}")
     return " > ".join(partes)
-
 
 def stack(vv, dv, fmt, better="low", sign=True):
     if vv is None or dv is None:
@@ -712,7 +659,6 @@ def stack(vv, dv, fmt, better="low", sign=True):
     cls = "" if abs(diff) < 1e-9 or better is None else ("g" if good else "r")
     dtxt = f" ({diff:+.2f})" if sign else ""
     return f"<span class='{cls}'>{fmt(vv)}{dtxt}</span><br>{fmt(dv)}"
-
 
 def tabela_avb(lista, titulo, ctx):
     st.markdown(f"#### {titulo}")
@@ -747,7 +693,6 @@ def tabela_avb(lista, titulo, ctx):
              "Recup. Média", "Confiança", "Força"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
-
 def observacoes(rank):
     out = []
     for d in rank:
@@ -766,7 +711,6 @@ def observacoes(rank):
         out.append(f"- **{trap_label(d)} {d['name']}** — ➕ {'; '.join(pos) or '-'} | ➖ {'; '.join(neg) or '-'}")
     return "\n".join(out)
 
-
 def hora_br(hhmm):
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", hhmm or "")
     if not m:
@@ -775,13 +719,11 @@ def hora_br(hhmm):
     h = t.hour % 12 or 12
     return f"{h}:{t.minute:02d}"
 
-
 # =====================================================================
 # APP
 # =====================================================================
 
-
- def mostrar_diagnostico(dogs, meta):
+def mostrar_diagnostico(dogs, meta):
     st.markdown("**Campos lidos do JSON** (se algum estiver 0, ajuste o `FIELD_MAP` no topo do código):")
     st.dataframe(diagnostico_campos(dogs), use_container_width=True, hide_index=True)
     st.markdown("**Chaves da primeira corrida do primeiro galgo (JSON bruto):**")
@@ -791,7 +733,6 @@ def hora_br(hhmm):
               ["date_str", "track", "dist", "grade", "split", "bends", "fin", "by", "wntm", "gng",
                "weight", "remarks", "caltm"]}} for d in dogs for r in d["runs"]]
     st.dataframe(pd.DataFrame(linhas), use_container_width=True)
-
 
 def main():
     st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
@@ -815,7 +756,6 @@ def main():
         if dogs:
             st.session_state["dib_data"] = (dogs, meta)
 
-    # Mensagem de ajuda se ainda não houver dados carregados
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
     else:
@@ -854,3 +794,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
