@@ -253,35 +253,31 @@ def extrair_metadados_json(data, info_card, dogs):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    # 2. Horário da Prova (priorizando offTime, displayTime ou time)
+    # 2. Horário da Prova (busca estrita por displayTime ou formato HH:MM limpo)
     t_raw = None
     for src in [info_card, data]:
         if isinstance(src, dict):
-            for k in ["offTime", "displayTime", "time", "raceTime", "scheduledTime"]:
+            for k in ["displayTime", "offTime", "time"]:
                 val = src.get(k)
-                if val and re.search(r"\d{1,2}:\d{2}", str(val)):
-                    t_raw = str(val)
+                if val and isinstance(val, str) and re.search(r"^\d{1,2}:\d{2}$", val.strip()):
+                    t_raw = val.strip()
                     break
         if t_raw: break
-        
+
     if not t_raw:
-        def achar_hora(obj):
-            nonlocal t_raw
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    kl = str(k).lower()
-                    if any(x in kl for x in ("time", "off", "hour")) and isinstance(v, str) and re.search(r"\d{1,2}:\d{2}", v):
-                        if not t_raw: t_raw = v
-            elif isinstance(obj, list):
-                for item in obj:
-                    achar_hora(item)
-        achar_hora(data)
-        achar_hora(info_card)
+        for src in [info_card, data]:
+            if isinstance(src, dict):
+                for k in ["displayTime", "offTime", "time", "raceTime"]:
+                    val = src.get(k)
+                    if val and re.search(r"\d{1,2}:\d{2}", str(val)):
+                        m_h = re.search(r"(\d{1,2}:\d{2})", str(val))
+                        if m_h:
+                            t_raw = m_h.group(1)
+                            break
+            if t_raw: break
 
     if t_raw:
-        m_time = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
-        if m_time:
-            info["hora"] = m_time.group(1)
+        info["hora"] = t_raw
 
     # 3. Número da Race
     r_num = None
@@ -310,14 +306,15 @@ def extrair_metadados_json(data, info_card, dogs):
         grade = dogs[0]["runs"][0].get("grade")
     info["classe"] = str(grade or "").strip().upper()
 
-    # 5. Post Pick (Varredura inteligente por chaves ou texto contendo post pick)
+    # 5. Post Pick (Filtro estrito para traps de 1 a 6 separados por hífen/barra, evitando datas)
     pp_val = None
     for src in [info_card, data]:
         if isinstance(src, dict):
             for k in ["postPick", "post_pick", "tips", "comment", "raceTitle", "summary", "heading"]:
                 val = src.get(k)
                 if val and isinstance(val, str):
-                    m_pp = re.search(r"(?:post\s*pick[:\s]*)([\d\-_/]+)", val, re.IGNORECASE)
+                    # Procura padrão estrito de post pick ex: 2-4-3 ou 1/2/3 (apenas números de traps 1 a 6)
+                    m_pp = re.search(r"\b([1-6][-/][1-6](?:[-/][1-6])*)\b", val)
                     if m_pp:
                         pp_val = m_pp.group(1)
                         break
@@ -328,14 +325,10 @@ def extrair_metadados_json(data, info_card, dogs):
             nonlocal pp_val
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if isinstance(v, str):
-                        m_pp = re.search(r"(?:post\s*pick[:\s]*)([\d\-_/]+)", v, re.IGNORECASE)
+                    if isinstance(v, str) and not pp_val:
+                        m_pp = re.search(r"\b([1-6][-/][1-6](?:[-/][1-6])*)\b", v)
                         if m_pp:
                             pp_val = m_pp.group(1)
-                        elif not pp_val and re.search(r"\b\d+[-/]\d+[-/]\d+\b", v):
-                            m_pp2 = re.search(r"(\b\d+[-/]\d+[-/]\d+\b)", v)
-                            if m_pp2:
-                                pp_val = m_pp2.group(1)
                     elif isinstance(v, (dict, list)):
                         achar_pp(v)
             elif isinstance(obj, list):
