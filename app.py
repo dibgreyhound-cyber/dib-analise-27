@@ -2,7 +2,7 @@
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
 - Extracao robusta de metadados (Pista, Horario, Race, Classe, Post Pick)
-- Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB)
+- Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
 import re
@@ -656,6 +656,29 @@ def forca(V, D, ctx):
         f += 5; notes.append("+5 Trap Vazia")
     return f, notes
 
+def avb_valido(V, D, ctx):
+    """
+    Critérios para o galgo vencedor (V) no AvB:
+    1. Média Split no Top 3 da prova
+    2. Média Split menor (mais rápida) do que a do desafiante (D)
+    3. Recuperação Média maior do que a do desafiante (D)
+    """
+    top3_ms = ctx.get("top3_ms", set())
+    
+    # 1. Média Split no Top 3
+    if V["name"] not in top3_ms:
+        return False
+        
+    # 2. Média Split menor que a do desafiante
+    if V["msplit"] is None or D["msplit"] is None or V["msplit"] >= D["msplit"]:
+        return False
+        
+    # 3. Recuperação Média maior que a do desafiante
+    if V["rec"] is None or D["rec"] is None or V["rec"] <= D["rec"]:
+        return False
+        
+    return True
+
 def montar_avbs(rank, ctx):
     elig = [d for d in rank if d["elegivel"]]
     elite = {}
@@ -669,9 +692,13 @@ def montar_avbs(rank, ctx):
                 D = rank[p - 1]
                 if D is not V and D["overall"] < V["overall"]:
                     elite[(V["name"], D["name"])] = (V, D)
+                    
     alvos = [d for d in rank if d["alvo"]]
     s1, s2, s3 = [], [], []
+    
     for (V, D) in elite.values():
+        if not avb_valido(V, D, ctx):
+            continue
         f, n = forca(V, D, ctx)
         if D["alvo"]:
             continue
@@ -679,18 +706,25 @@ def montar_avbs(rank, ctx):
             s2.append((V, D, f, n, False))
         elif f >= CFG["FORCA_SECUNDARIO"]:
             s3.append((V, D, f, n, False))
+            
     for A in alvos:
         for V in elig:
             if V is A or V["overall"] <= A["overall"]:
                 continue
+            if not avb_valido(V, A, ctx):
+                continue
             f, n = forca(V, A, ctx)
             if f >= CFG["FORCA_PRINCIPAL"]:
                 s1.append((V, A, f, n, (V["name"], A["name"]) in elite))
+                
     for (V, D) in elite.values():
         if D["alvo"]:
+            if not avb_valido(V, D, ctx):
+                continue
             f, n = forca(V, D, ctx)
             if CFG["FORCA_SECUNDARIO"] <= f < CFG["FORCA_PRINCIPAL"]:
                 s3.append((V, D, f, n, False))
+                
     key = lambda x: -x[2]
     return sorted(s1, key=key), sorted(s2, key=key), sorted(s3, key=key)
 
