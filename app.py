@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick) do objeto race
+- Extracao de metadados focada no padrao de horario (HH:MM)
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -177,7 +177,7 @@ def wmean(vals, ws):
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
 # =====================================================================
-# EXTRACAO (Racing Post - Abordagem Robustecida no Objeto Race)
+# EXTRACAO (Racing Post - Varredura por Formato HH:MM)
 # =====================================================================
 
 HINTS = {
@@ -246,7 +246,6 @@ def descobrir_chaves(dogs):
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    # Recolher fontes potenciais de metadados na ordem correta (incluindo sub-dicionários 'race' e 'form')
     fontes = []
     for src in [info_card, data]:
         if isinstance(src, dict):
@@ -267,14 +266,32 @@ def extrair_metadados_json(data, info_card, dogs):
     if not info["pista"] and dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
-    # 2. Horário da Prova
+    # 2. Horário da Prova (Varredura estricta pelo formato H:MM ou HH:MM)
     for src in fontes:
         t_raw = pick(src, ["offTime", "displayTime", "time", "raceTime", "scheduledTime"])
         if t_raw:
-            m = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
+            m = re.search(r"\b(\d{1,2}:\d{2})\b", str(t_raw))
             if m:
                 info["hora"] = m.group(1)
                 break
+    if not info["hora"]:
+        # Varredura recursiva em todo o JSON procurando qualquer string no formato HH:MM (ex: 7:22)
+        def achar_formato_hora(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str):
+                        m = re.search(r"\b([1-9]|1[0-2]):\d{2}\b", v)
+                        if m:
+                            return m.group(0)
+                    elif isinstance(v, (dict, list)):
+                        res = achar_formato_hora(v)
+                        if res: return res
+            elif isinstance(obj, list):
+                for item in obj:
+                    res = achar_formato_hora(item)
+                    if res: return res
+            return ""
+        info["hora"] = achar_formato_hora(data) or achar_formato_hora(info_card)
 
     # 3. Número da Race
     for src in fontes:
