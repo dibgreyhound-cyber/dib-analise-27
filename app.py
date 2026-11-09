@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
+- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick) do objeto race
+- Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
+- Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
 import re
 import html
@@ -16,24 +19,24 @@ import streamlit as st
 # =====================================================================
 
 CFG = {
-    "N_RUNS": 5,
-    "WEIGHTS": [5, 4, 3, 2, 1],
-    "POND_MODE": "validas",
-    "CAT_BASE_MODE": "media",
-    "CAT_BONUS": 2.0,
-    "N_CORREDORES": 6,
+    "N_RUNS": 5,                       # ultimas corridas lidas por galgo
+    "WEIGHTS": [5, 4, 3, 2, 1],        # Time Decay
+    "POND_MODE": "validas",            # "validas": 5,4,3.. so entre corridas validas | "posicao": peso pela posicao entre as 5
+    "CAT_BASE_MODE": "media",          # "media" das classes validas | "ultima" corrida valida
+    "CAT_BONUS": 2.0,                  # desceu de classe +2 / subiu -2
+    "N_CORREDORES": 6,                 # total de corredores para a % de Recup
     "TRAFFIC_ADJ": {"baulk": 0.20, "crd": 0.10, "bmp": 0.10, "fcd": 0.10},
-    "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},
-    "VEL_MIN": 0.0,
+    "VEL_PTS": {"adj": 40, "mtime": 30, "msplit": 15, "ritmo": 15},        # Base de Velocidade (100)
+    "VEL_MIN": 0.0,                    # pontos do pior em cada item
     "PERFIL_PTS": {"Limpo": 10.0, "Irregular": 5.0, "Trombador": 2.5},
-    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)),
+    "RECUP_PTS": lambda rec: float(np.clip(5 + (rec or 0) / 10.0, 0, 10)),  # 0 a 10 pts
     "REMARKS_PTS": {"early": 1.5, "clear": 5.0, "slowaway": -10.0, "firstbend": -7.0},
     "TRAP_VAZIA": 1.5, "ESMAGAMENTO": -1.5, "TRAFEGO_SEVERO": -2.0, "WIDE": -1.0,
     "H2H": 1.0, "H2H_MARGEM_GRANDE": 3.0, "H2H_GRANDE": 2.0,
     "MOMENTUM_VITORIA": 3.0, "MOMENTUM_DERROTA": -2.0, "DERROTA_POS_MIN": 5,
-    "PESO_DIAS_NO_OVERALL": True,
+    "PESO_DIAS_NO_OVERALL": True,      # soma os pontos de Peso e Dias no Overall
     "FORCA_PRINCIPAL": 50.0, 
-    "FORCA_SECUNDARIO": 45.0,
+    "FORCA_SECUNDARIO": 45.0,          # Intervalo 45.0 a 49.9
     "CONF_MIN_VENCEDOR": 60.0,
 }
 
@@ -160,17 +163,13 @@ def remark_points(rem):
     toks = [t for t in re.split(r"[,\s]+", str(rem or "").lower()) if t]
     pts, tags = 0.0, []
     if any(re.match(r"^(ep|ald|snld|ld)", t) for t in toks):
-        pts += R["early"]
-        tags.append("Early Pace/Led")
+        pts += R["early"]; tags.append("Early Pace/Led")
     if any(t.startswith("clrrn") for t in toks):
-        pts += R["clear"]
-        tags.append("Clear Run")
+        pts += R["clear"]; tags.append("Clear Run")
     if any(t.startswith("saw") or t.startswith("vsaw") for t in toks):
-        pts += R["slowaway"]
-        tags.append("Slow Away")
+        pts += R["slowaway"]; tags.append("Slow Away")
     if first_bend_traffic(rem):
-        pts += R["firstbend"]
-        tags.append("First Bend Traffic")
+        pts += R["firstbend"]; tags.append("First Bend Traffic")
     return pts, tags
 
 def wmean(vals, ws):
@@ -178,7 +177,7 @@ def wmean(vals, ws):
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
 # =====================================================================
-# EXTRACAO
+# EXTRACAO (Racing Post - Abordagem Robustecida no Objeto Race)
 # =====================================================================
 
 HINTS = {
@@ -244,93 +243,66 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
-# --- NOVA FUNÇÃO DE BUSCA INTELIGENTE ---
-def buscar_dado_especifico(obj, chaves_alvo, ignorar_chaves=None):
-    if ignorar_chaves is None:
-        ignorar_chaves = set()
-    
-    if isinstance(obj, dict):
-        # 1. Tenta achar no nível atual
-        for k, v in obj.items():
-            kl = str(k).lower()
-            if kl in chaves_alvo and v not in (None, "", []):
-                return v
-        
-        # 2. Se não achou, desce um nível (ignorando chaves proibidas)
-        for k, v in obj.items():
-            kl = str(k).lower()
-            if kl in ignorar_chaves:
-                continue
-            res = buscar_dado_especifico(v, chaves_alvo, ignorar_chaves)
-            if res is not None:
-                return res
-                
-    elif isinstance(obj, list):
-        for item in obj:
-            res = buscar_dado_especifico(item, chaves_alvo, ignorar_chaves)
-            if res is not None:
-                return res
-    return None
-
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    # O que NÃO queremos que a busca vasculhe (dados dos cães)
-    ignorar = {"forms", "dogs", "runs", "results", "entries"}
+    # Recolher fontes potenciais de metadados na ordem correta (incluindo sub-dicionários 'race' e 'form')
+    fontes = []
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            fontes.append(src)
+            if isinstance(src.get("race"), dict):
+                fontes.append(src["race"])
+            if isinstance(src.get("form"), dict):
+                fontes.append(src["form"])
+                if isinstance(src["form"].get("race"), dict):
+                    fontes.append(src["form"]["race"])
 
     # 1. Pista
-    p = buscar_dado_especifico([info_card, data], {"trackname", "track", "coursename", "meetingname", "venue"}, ignorar)
-    if p:
-        info["pista"] = str(p).strip()
-    elif dogs and dogs[0].get("runs"):
+    for src in fontes:
+        pista = pick(src, ["trackName", "track", "meetingName", "courseName"])
+        if pista:
+            info["pista"] = str(pista).strip()
+            break
+    if not info["pista"] and dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
-    # 2. Horário
-    t = buscar_dado_especifico([info_card, data], {"offtime", "displaytime", "racetime", "starttime", "time"}, ignorar)
-    if t:
-        s_t = str(t).strip()
-        # Tenta achar padrão HH:MM
-        m = re.search(r"(\d{1,2}:\d{2})", s_t)
-        if m:
-            info["hora"] = m.group(1)
-        else:
-            # Tenta achar padrão HHMM (ex: 1922)
-            m2 = re.search(r"\b(\d{3,4})\b", s_t)
-            if m2:
-                h = m2.group(1).zfill(4)
-                info["hora"] = f"{h[:2]}:{h[2:]}"
+    # 2. Horário da Prova
+    for src in fontes:
+        t_raw = pick(src, ["offTime", "displayTime", "time", "raceTime", "scheduledTime"])
+        if t_raw:
+            m = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
+            if m:
+                info["hora"] = m.group(1)
+                break
 
     # 3. Número da Race
-    r = buscar_dado_especifico([info_card, data], {"racenum", "racenumber", "rnum"}, ignorar)
-    if r:
-        m = re.search(r"(\d+)", str(r))
-        if m:
-            info["race"] = m.group(1)
+    for src in fontes:
+        r_num = pick(src, ["raceNum", "raceNumber", "rNum", "raceNumberDesc", "number"])
+        if r_num is not None:
+            info["race"] = str(r_num).replace("Race", "").strip()
+            break
 
-    # 4. Classe
-    c = buscar_dado_especifico([info_card, data], {"raceclass", "racegrade", "class", "grade", "raceclassdesc"}, ignorar)
-    if c:
-        info["classe"] = str(c).strip().upper()
-    elif dogs and dogs[0].get("runs"):
-        runs_sorted = sorted(dogs[0]["runs"], key=lambda x: x["date"] or datetime.min, reverse=True)
-        if runs_sorted:
-            info["classe"] = str(runs_sorted[0].get("grade", "")).strip().upper()
+    # 4. Classe (Grade)
+    for src in fontes:
+        grade = pick(src, ["raceClass", "grade", "class", "raceClassDesc", "raceGrade"])
+        if grade:
+            info["classe"] = str(grade).strip().upper()
+            break
+    if not info["classe"] and dogs and dogs[0].get("runs"):
+        info["classe"] = str(dogs[0]["runs"][0].get("grade", "")).strip().upper()
 
     # 5. Post Pick
-    pp = buscar_dado_especifico([info_card, data], {"postpick", "post_pick", "tips", "tip", "postpicks", "picks", "selection"}, ignorar)
-    if pp:
-        pp_text = ""
-        if isinstance(pp, list):
-            nums = [str(x) for x in pp if str(x).isdigit()]
-            if nums:
-                pp_text = "".join(nums)
-        else:
-            pp_text = str(pp)
-        
-        # Procura por 3 números separados ou juntos
-        m = re.search(r"([1-6])[-/. ]*([1-6])[-/. ]*([1-6])", pp_text)
-        if m:
-            info["post_pick"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    for src in fontes:
+        pp = pick(src, ["postPick", "post_pick", "tips", "tip"])
+        if pp:
+            m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", str(pp))
+            if m:
+                info["post_pick"] = m.group(1).strip().replace("/", "-").replace(".", "-")
+                break
+            elif re.search(r"[1-6]", str(pp)):
+                info["post_pick"] = str(pp).strip().replace("/", "-").replace(".", "-")
+                break
 
     return info
 
@@ -555,8 +527,7 @@ def finalizar(ds, ctx):
     h2h = h2h_pairs(ok)
     h2h_net, h2h_big = {d["name"]: 0 for d in ok}, {d["name"]: 0.0 for d in ok}
     for (w, l, m) in h2h.values():
-        h2h_net[w] += 1
-        h2h_net[l] -= 1
+        h2h_net[w] += 1; h2h_net[l] -= 1
         h2h_big[w] = max(h2h_big[w], m)
     ctx["h2h"] = h2h
 
@@ -615,32 +586,32 @@ def forca(V, D, ctx):
     f += (V["cat"] - D["cat"]) * 2.0
     notes = []
     if V["estilo"] == "Rápido" and D["estilo"] != "Rápido":
-        f += 5
-        notes.append("+5 Rápido")
+        f += 5; notes.append("+5 Rápido")
     key = tuple(sorted([V["name"], D["name"]]))
     h = ctx["h2h"].get(key)
     if h and h[0] == V["name"]:
-        f += 5
-        notes.append("+5 H2H")
+        f += 5; notes.append("+5 H2H")
     if V["estilo"] == "Rápido" and D["estilo"] == "Rápido" and V["trap"] in (1, 2, 3):
-        f += 5
-        notes.append("+5 trap interna")
+        f += 5; notes.append("+5 trap interna")
     if V["estilo"] == "Fecha forte" and D["estilo"] == "Rápido" and D["trap"] in (1, 2, 3):
-        f -= 5
-        notes.append("−5 Fecha forte vs Rápido interno")
+        f -= 5; notes.append("−5 Fecha forte vs Rápido interno")
     sd = float(np.clip(10.0 * (D["sd"] - V["sd"]), -5, 5))
     f += sd
     if abs(sd) >= 0.05:
         notes.append(f"{sd:+.1f} desvio")
     if V["trap"] in pp and (D["trap"] not in pp or pp.index(V["trap"]) < pp.index(D["trap"])):
-        f += 5
-        notes.append("+5 Post Pick")
+        f += 5; notes.append("+5 Post Pick")
     if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]):
-        f += 5
-        notes.append("+5 Trap Vazia")
+        f += 5; notes.append("+5 Trap Vazia")
     return f, notes
 
 def avb_valido(V, D, ctx):
+    """
+    Critérios obrigatórios para o galgo vencedor (V) no AvB:
+    1. Média Split no Top 3 da prova
+    2. Média Split menor (mais rápida) do que a do desafiante (D)
+    3. Recuperação Média maior do que a do desafiante (D)
+    """
     top3_ms = ctx.get("top3_ms", set())
     
     if V["name"] not in top3_ms:
@@ -728,10 +699,8 @@ def tbl(headers, rows, sticky=True):
         cells = []
         for i, c in enumerate(row):
             cls = ""
-            if sticky and i == 0: 
-                cls = " class='s1'"
-            elif sticky and i == 1: 
-                cls = " class='s2 l'"
+            if sticky and i == 0: cls = " class='s1'"
+            elif sticky and i == 1: cls = " class='s2 l'"
             cells.append(f"<td{cls}>{c}</td>")
         out.append("<tr>" + "".join(cells) + "</tr>")
     return f"<div class='dib-wrap'><table class='dib'><tr>{h}</tr>{''.join(out)}</table></div>"
@@ -844,28 +813,18 @@ def observacoes(rank):
     out = []
     for d in rank:
         pos, neg = [], []
-        if d["perfil"] == "Limpo": 
-            pos.append("perfil limpo")
-        if d["perfil"] == "Trombador": 
-            neg.append(f"trombador ({d['n_traf']} ocorrências)")
-        if d["rec"] is not None and d["rec"] > 0: 
-            pos.append(f"recupera posições ({d['rec']:+.1f}%)")
-        if d["rec"] is not None and d["rec"] <= 0: 
-            neg.append(f"não recupera ({d['rec']:+.1f}%)")
+        if d["perfil"] == "Limpo": pos.append("perfil limpo")
+        if d["perfil"] == "Trombador": neg.append(f"trombador ({d['n_traf']} ocorrências)")
+        if d["rec"] is not None and d["rec"] > 0: pos.append(f"recupera posições ({d['rec']:+.1f}%)")
+        if d["rec"] is not None and d["rec"] <= 0: neg.append(f"não recupera ({d['rec']:+.1f}%)")
         pos += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v > 0]
         neg += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v < 0]
-        if d["remark_tags"]: 
-            (neg if d["remark_pts"] < 0 else pos).append(", ".join(d["remark_tags"]))
-        if d["bloqueado"]: 
-            neg.append(f"confiança {d['conf']:.0f}% (bloqueado como vencedor)")
-        if d["trial_block"]: 
-            neg.append("última corrida foi trial (bloqueado como vencedor)")
-        if d["name"] not in st.session_state.get("top3_ms_names", set()): 
-            neg.append("Média Split fora do Top 3 (bloqueado como vencedor)")
-        if d["alvo"]: 
-            neg.append("alvo: Média Split fora do Top 3 e Recup ≤ 0")
-        if d["dias_pts"] or d["peso_pts"]: 
-            neg.append(f"dias {d['dias']} ({d['dias_pts']:+.0f}), peso Δ{f2(d['peso_var'],1)} ({d['peso_pts']:+.0f})")
+        if d["remark_tags"]: (neg if d["remark_pts"] < 0 else pos).append(", ".join(d["remark_tags"]))
+        if d["bloqueado"]: neg.append(f"confiança {d['conf']:.0f}% (bloqueado como vencedor)")
+        if d["trial_block"]: neg.append("última corrida foi trial (bloqueado como vencedor)")
+        if d["name"] not in st.session_state.get("top3_ms_names", set()): neg.append("Média Split fora do Top 3 (bloqueado como vencedor)")
+        if d["alvo"]: neg.append("alvo: Média Split fora do Top 3 e Recup ≤ 0")
+        if d["dias_pts"] or d["peso_pts"]: neg.append(f"dias {d['dias']} ({d['dias_pts']:+.0f}), peso Δ{f2(d['peso_var'],1)} ({d['peso_pts']:+.0f})")
         out.append(f"- **{trap_label(d)} {d['name']}** — ➕ {'; '.join(pos) or '-'} | ➖ {'; '.join(neg) or '-'}")
     return "\n".join(out)
 
