@@ -247,24 +247,48 @@ def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
     # 1. Pista
-    pista = (info_card.get("trackName") or info_card.get("track") or 
-             data.get("trackName") or data.get("track") or data.get("meetingName") or data.get("courseName"))
+    pista = None
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            for k in ["trackName", "track", "meetingName", "courseName"]:
+                if src.get(k):
+                    pista = src.get(k)
+                    break
+        if pista: break
     if not pista and dogs and dogs[0].get("runs"):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    # 2. Horário da Prova (Procura em displayTime, offTime ou extrai do campo raceTime/time)
+    # 2. Horário da Prova
     t_raw = None
     for src in [info_card, data]:
         if isinstance(src, dict):
-            for k in ["displayTime", "offTime", "time", "raceTime"]:
+            for k in ["offTime", "displayTime", "time", "raceTime", "scheduledTime"]:
                 val = src.get(k)
-                if val and isinstance(val, str) and re.search(r"\d{1,2}:\d{2}", val):
-                    m_h = re.search(r"(\d{1,2}:\d{2})", val)
-                    if m_h:
-                        t_raw = m_h.group(1)
+                if val:
+                    m = re.search(r"(\d{1,2}:\d{2})", str(val))
+                    if m:
+                        t_raw = m.group(1)
                         break
         if t_raw: break
+
+    if not t_raw:
+        def achar_hora(obj):
+            nonlocal t_raw
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str) and not t_raw:
+                        m = re.search(r"(\d{1,2}:\d{2})", v)
+                        if m:
+                            t_raw = m.group(1)
+                    elif isinstance(v, (dict, list)):
+                        achar_hora(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    achar_hora(item)
+        achar_hora(data)
+        achar_hora(info_card)
+
     if t_raw:
         info["hora"] = t_raw
 
@@ -273,9 +297,8 @@ def extrair_metadados_json(data, info_card, dogs):
     for src in [info_card, data]:
         if isinstance(src, dict):
             for k in ["raceNum", "raceNumber", "rNum", "raceNumberDesc"]:
-                val = src.get(k)
-                if val is not None:
-                    r_num = val
+                if src.get(k) is not None:
+                    r_num = src.get(k)
                     break
         if r_num is not None: break
     if r_num is not None:
@@ -286,39 +309,51 @@ def extrair_metadados_json(data, info_card, dogs):
     for src in [info_card, data]:
         if isinstance(src, dict):
             for k in ["raceClass", "grade", "class", "raceClassDesc"]:
-                val = src.get(k)
-                if val:
-                    grade = val
+                if src.get(k):
+                    grade = src.get(k)
                     break
         if grade: break
     if not grade and dogs and dogs[0].get("runs"):
         grade = dogs[0]["runs"][0].get("grade")
     info["classe"] = str(grade or "").strip().upper()
 
-    # 5. Post Pick (Varredura estrita de post-pick sem pegar odds ou datas)
+    # 5. Post Pick
     pp_val = None
     for src in [info_card, data]:
         if isinstance(src, dict):
-            # Procura chave direta de post pick se existir
             for k in ["postPick", "post_pick"]:
-                val = src.get(k)
-                if val:
-                    pp_val = str(val)
+                if src.get(k):
+                    pp_val = str(src.get(k))
                     break
             if pp_val: break
             
-            # Se não, varre textos procurando explicitamente por "post pick" ou formato de traps (ex: 2-4-3)
             for k, v in src.items():
                 if isinstance(v, str):
-                    if "post" in k.lower() or "pick" in k.lower() or "post" in v.lower():
-                        m_pp = re.search(r"([1-6][-/.][1-6][-/.][1-6])", v)
-                        if m_pp:
-                            pp_val = m_pp.group(1)
-                            break
+                    m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", v)
+                    if m:
+                        pp_val = m.group(1)
+                        break
         if pp_val: break
 
+    if not pp_val:
+        def achar_pp(obj):
+            nonlocal pp_val
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str) and not pp_val:
+                        m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", v)
+                        if m:
+                            pp_val = m.group(1)
+                    elif isinstance(v, (dict, list)):
+                        achar_pp(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    achar_pp(item)
+        achar_pp(data)
+        achar_pp(info_card)
+
     if pp_val:
-        info["post_pick"] = pp_val.strip()
+        info["post_pick"] = pp_val.strip().replace("/", "-").replace(".", "-")
 
     return info
 
@@ -850,6 +885,12 @@ def main():
     st.subheader("🔗 Cole o link da corrida do Racing Post")
     url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
 
+    if "s_pista" not in st.session_state: st.session_state["s_pista"] = ""
+    if "s_hora" not in st.session_state: st.session_state["s_hora"] = ""
+    if "s_race" not in st.session_state: st.session_state["s_race"] = ""
+    if "s_classe" not in st.session_state: st.session_state["s_classe"] = ""
+    if "s_pp" not in st.session_state: st.session_state["s_pp"] = ""
+
     if st.button("Analisar Corrida", type="primary") and url:
         dogs, meta, meta_info = extrair_dados_racingpost(url)
         if dogs:
@@ -859,15 +900,16 @@ def main():
             st.session_state["s_race"] = meta_info.get("race", "")
             st.session_state["s_classe"] = meta_info.get("classe", "")
             st.session_state["s_pp"] = meta_info.get("post_pick", "")
+            st.rerun()
 
     with st.sidebar:
         st.header("Dados da corrida")
-        pista = st.text_input("Pista", value=st.session_state.get("s_pista", ""))
-        hora = st.text_input("Horário da pista (ex.: 6:14)", value=st.session_state.get("s_hora", ""))
-        race = st.text_input("Race nº", value=st.session_state.get("s_race", ""))
-        classe = st.text_input("Classe de hoje (ex.: A3)", value=st.session_state.get("s_classe", ""))
+        pista = st.text_input("Pista", key="s_pista")
+        hora = st.text_input("Horário da pista (ex.: 6:14)", key="s_hora")
+        race = st.text_input("Race nº", key="s_race")
+        classe = st.text_input("Classe de hoje (ex.: A3)", key="s_classe")
         dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 2-4-3)", value=st.session_state.get("s_pp", ""))
+        pp_in = st.text_input("Post Pick (ex.: 2-4-3)", key="s_pp")
 
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
