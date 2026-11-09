@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao automatica de metadados (Pista, Horario, Race, Classe, Post Pick)
+- Extracao robusta de metadados (Pista, Horario, Race, Classe, Post Pick)
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -243,37 +243,45 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
-def extrair_metadados_json(data, dogs):
+def extrair_metadados_json(data, info_card, dogs):
+    """Extrai pista, horario, race, classe e post pick vasculhando o JSON e a API geral de card."""
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    pista = data.get("trackName") or data.get("track") or data.get("meetingName") or data.get("courseName")
+    # 1. Pista
+    pista = (info_card.get("trackName") or info_card.get("track") or 
+             data.get("trackName") or data.get("track") or data.get("meetingName") or data.get("courseName"))
     if not pista and dogs and dogs[0].get("runs"):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    t_raw = data.get("raceTime") or data.get("time") or data.get("offTime") or data.get("displayTime")
+    # 2. Horário da prova (Procura chaves específicas ou varredura de hora válida no formato HH:MM)
+    t_raw = (info_card.get("raceTime") or info_card.get("time") or info_card.get("offTime") or 
+             data.get("raceTime") or data.get("time") or data.get("offTime") or data.get("displayTime"))
+    
     if not t_raw:
         def achar_hora(obj):
             nonlocal t_raw
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if isinstance(v, str) and re.search(r"\d{1,2}:\d{2}", v) and not t_raw:
-                        m_h = re.search(r"(\d{1,2}:\d{2})", v)
-                        if m_h:
-                            t_raw = m_h.group(1)
+                    kl = str(k).lower()
+                    if any(x in kl for x in ("time", "off", "hour")) and isinstance(v, str) and re.search(r"\d{1,2}:\d{2}", v):
+                        if not t_raw: t_raw = v
                     elif isinstance(v, (dict, list)):
                         achar_hora(v)
             elif isinstance(obj, list):
                 for item in obj:
                     achar_hora(item)
         achar_hora(data)
-    
+        achar_hora(info_card)
+
     if t_raw:
         m_time = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
         if m_time:
-            info["hora"] = f"{m_time.group(1)}"
+            info["hora"] = m_time.group(1)
 
-    r_num = data.get("raceNum") or data.get("raceNumber") or data.get("rNum") or data.get("raceNumberDesc")
+    # 3. Número da Race
+    r_num = (info_card.get("raceNum") or info_card.get("raceNumber") or info_card.get("rNum") or 
+             data.get("raceNum") or data.get("raceNumber") or data.get("rNum"))
     if not r_num:
         def achar_racenum(obj):
             nonlocal r_num
@@ -287,22 +295,27 @@ def extrair_metadados_json(data, dogs):
                 for item in obj:
                     achar_racenum(item)
         achar_racenum(data)
+        achar_racenum(info_card)
     if r_num:
         info["race"] = str(r_num).replace("Race", "").strip()
 
-    grade = data.get("raceClass") or data.get("grade") or data.get("class")
+    # 4. Classe (Grade)
+    grade = (info_card.get("raceClass") or info_card.get("grade") or info_card.get("class") or
+             data.get("raceClass") or data.get("grade"))
     if not grade and dogs and dogs[0].get("runs"):
         grade = dogs[0]["runs"][0].get("grade")
     info["classe"] = str(grade or "").strip().upper()
 
-    pp_val = data.get("postPick") or data.get("post_pick")
+    # 5. Post Pick
+    pp_val = (info_card.get("postPick") or info_card.get("post_pick") or 
+              data.get("postPick") or data.get("post_pick"))
     if not pp_val:
         def achar_pp(obj):
             nonlocal pp_val
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if isinstance(v, str) and "post pick" in v.lower():
-                        m_pp = re.search(r"post\s*pick[:\s]*([\d\-_/]+)", v, re.IGNORECASE)
+                    if isinstance(v, str) and "post" in v.lower() and "pick" in v.lower():
+                        m_pp = re.search(r"(?:post\s*pick[:\s]*)([\d\-_/]+)", v, re.IGNORECASE)
                         if m_pp:
                             pp_val = m_pp.group(1)
                     elif isinstance(v, (dict, list)):
@@ -311,6 +324,7 @@ def extrair_metadados_json(data, dogs):
                 for item in obj:
                     achar_pp(item)
         achar_pp(data)
+        achar_pp(info_card)
     if pp_val:
         info["post_pick"] = str(pp_val).strip()
 
@@ -324,22 +338,36 @@ def extrair_dados_racingpost(url):
             st.error("Link inválido. Precisa ter 'race_id' e 'r_date'.")
             return None, None, None
         race_id, r_date_str = race_id_match.group(1), r_date_match.group(1)
-        api_url = (f"https://greyhoundbet.racingpost.com/card/blocks.sd?"
-                   f"race_id={race_id}&r_date={r_date_str}&blocks=form")
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://greyhoundbet.racingpost.com/",
         }
+        
         with st.spinner("Buscando dados no Racing Post..."):
+            # 1. Puxa os dados gerais do card/race para pegar horario, post pick e metadados oficiais
+            card_api_url = f"https://greyhoundbet.racingpost.com/card/race.sd?race_id={race_id}&r_date={r_date_str}"
+            info_card = {}
+            try:
+                resp_card = requests.get(card_api_url, headers=headers, timeout=10)
+                if resp_card.status_code == 200:
+                    info_card = resp_card.json()
+            except Exception:
+                pass
+
+            # 2. Puxa o bloco de formulários dos cães
+            api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
             resp = requests.get(api_url, headers=headers, timeout=15)
             resp.raise_for_status()
             data = resp.json()
+
         dogs = data.get("form", {}).get("dogs", [])
         if not dogs:
             st.warning("Nenhum dado encontrado.")
             return None, None, None
+            
         descobrir_chaves(dogs)
         out = []
         for dog in dogs:
@@ -351,7 +379,8 @@ def extrair_dados_racingpost(url):
                 "peso_atual": to_float(dog.get("weight")),
                 "runs": runs,
             })
-        meta_info = extrair_metadados_json(data, out)
+            
+        meta_info = extrair_metadados_json(data, info_card, out)
         return out, {"r_date": r_date_str, "raw_first": dogs[0]}, meta_info
     except Exception as e:
         st.error(f"Erro: {e}")
@@ -517,7 +546,6 @@ def finalizar(ds, ctx):
     split_rank = sorted([d for d in ok if d["split"] is not None], key=lambda x: x["split"])
     top2_split = {d["name"] for d in split_rank[:2]}
     
-    # Top 3 melhores Média Split (menor msplit é melhor)
     ms_rank = sorted([d for d in ok if d["msplit"] is not None], key=lambda x: round(x["msplit"], 2))
     top3_ms = {d["name"] for d in ms_rank[:3]}
     ctx["top3_ms"] = top3_ms
@@ -560,14 +588,11 @@ def finalizar(ds, ctx):
         d["bloqueado"] = d["conf"] < CFG["CONF_MIN_VENCEDOR"]
         d["trial_block"] = d["forma_trial"]
         
-        # O galgo vencedor/favorito (V) PRECISA ter a Média Split entre os Top 3
         in_top3_ms = d["name"] in top3_ms
-        
         fora_top3 = not in_top3_ms
         d["alvo"] = fora_top3 and d["rec"] is not None and d["rec"] <= 0 \
             and (not d["forma_trial"] or len(d["val"]) >= 3)
             
-        # Elegível para vencer / AVB principal exige estar no top 3 de msplit
         d["elegivel"] = not d["bloqueado"] and not d["forma_trial"] and in_top3_ms
         
     for d in ds:
@@ -848,11 +873,11 @@ def main():
     with st.sidebar:
         st.header("Dados da corrida")
         pista = st.text_input("Pista", value=st.session_state.get("s_pista", ""))
-        hora = st.text_input("Horário da pista (ex.: 5:24)", value=st.session_state.get("s_hora", ""))
+        hora = st.text_input("Horário da pista (ex.: 6:14)", value=st.session_state.get("s_hora", ""))
         race = st.text_input("Race nº", value=st.session_state.get("s_race", ""))
         classe = st.text_input("Classe de hoje (ex.: A3)", value=st.session_state.get("s_classe", ""))
         dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 2-4-6)", value=st.session_state.get("s_pp", ""))
+        pp_in = st.text_input("Post Pick (ex.: 2-4-3)", value=st.session_state.get("s_pp", ""))
 
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
