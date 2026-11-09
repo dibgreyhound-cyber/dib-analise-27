@@ -246,63 +246,79 @@ def descobrir_chaves(dogs):
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    # Recolher fontes potenciais de metadados na ordem correta (incluindo sub-dicionários 'race' e 'form')
-    fontes = []
-    for src in [info_card, data]:
-        if isinstance(src, dict):
-            fontes.append(src)
-            if isinstance(src.get("race"), dict):
-                fontes.append(src["race"])
-            if isinstance(src.get("form"), dict):
-                fontes.append(src["form"])
-                if isinstance(src["form"].get("race"), dict):
-                    fontes.append(src["form"]["race"])
+    # Busca recursiva (varre todo o JSON independente do nível de aninhamento)
+    def buscar_chave(obj, chaves_alvo):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).lower() in chaves_alvo and v not in (None, "", []):
+                    return v
+                res = buscar_chave(v, chaves_alvo)
+                if res is not None:
+                    return res
+        elif isinstance(obj, list):
+            for item in obj:
+                res = buscar_chave(item, chaves_alvo)
+                if res is not None:
+                    return res
+        return None
+
+    fontes = [info_card, data]
 
     # 1. Pista
-    for src in fontes:
-        pista = pick(src, ["trackName", "track", "meetingName", "courseName"])
-        if pista:
-            info["pista"] = str(pista).strip()
-            break
-    if not info["pista"] and dogs and dogs[0].get("runs"):
+    pista = buscar_chave(fontes, {"trackname", "track", "meetingname", "coursename", "venue"})
+    if pista:
+        info["pista"] = str(pista).strip()
+    elif dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
     # 2. Horário da Prova
-    for src in fontes:
-        t_raw = pick(src, ["offTime", "displayTime", "time", "raceTime", "scheduledTime"])
-        if t_raw:
-            m = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
-            if m:
-                info["hora"] = m.group(1)
-                break
+    t_raw = buscar_chave(fontes, {"offtime", "displaytime", "time", "racetime", "scheduledtime", "race_time"})
+    if t_raw:
+        s_t = str(t_raw).strip()
+        m = re.search(r"(\d{1,2}:\d{2})", s_t)
+        if m:
+            info["hora"] = m.group(1)
+        else:
+            m2 = re.fullmatch(r"(\d{2})(\d{2})", s_t) # Caso venha "1922"
+            if m2:
+                info["hora"] = f"{m2.group(1)}:{m2.group(2)}"
 
     # 3. Número da Race
-    for src in fontes:
-        r_num = pick(src, ["raceNum", "raceNumber", "rNum", "raceNumberDesc", "number"])
-        if r_num is not None:
+    r_num = buscar_chave(fontes, {"racenum", "racenumber", "rnum", "racenumberdesc", "number", "racename"})
+    if r_num:
+        m = re.search(r"(\d+)", str(r_num))
+        if m:
+            info["race"] = m.group(1)
+        else:
             info["race"] = str(r_num).replace("Race", "").strip()
-            break
 
     # 4. Classe (Grade)
-    for src in fontes:
-        grade = pick(src, ["raceClass", "grade", "class", "raceClassDesc", "raceGrade"])
-        if grade:
-            info["classe"] = str(grade).strip().upper()
-            break
-    if not info["classe"] and dogs and dogs[0].get("runs"):
-        info["classe"] = str(dogs[0]["runs"][0].get("grade", "")).strip().upper()
+    grade = buscar_chave(fontes, {"raceclass", "grade", "class", "raceclassdesc", "racegrade", "race_class"})
+    if grade:
+        info["classe"] = str(grade).strip().upper()
+    elif dogs and dogs[0].get("runs"):
+        runs_sorted = sorted(dogs[0]["runs"], key=lambda x: x["date"] or datetime.min, reverse=True)
+        if runs_sorted:
+            info["classe"] = str(runs_sorted[0].get("grade", "")).strip().upper()
 
     # 5. Post Pick
-    for src in fontes:
-        pp = pick(src, ["postPick", "post_pick", "tips", "tip"])
-        if pp:
-            m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", str(pp))
-            if m:
-                info["post_pick"] = m.group(1).strip().replace("/", "-").replace(".", "-")
-                break
-            elif re.search(r"[1-6]", str(pp)):
-                info["post_pick"] = str(pp).strip().replace("/", "-").replace(".", "-")
-                break
+    pp = buscar_chave(fontes, {"postpick", "post_pick", "tips", "tip", "postpicks", "selection", "picks"})
+    if pp:
+        pp_text = ""
+        if isinstance(pp, list):
+            # Se vier como lista de números [3, 6, 4] ou de strings ["3", "6", "4"]
+            if len(pp) > 0:
+                if all(str(x).isdigit() for x in pp):
+                    pp_text = "".join(str(x) for x in pp)
+                else:
+                    pp_text = str(pp[0])
+        else:
+            pp_text = str(pp)
+        
+        # Extrai os 3 números independente do separador ("3-6-4", "364", "3,6,4")
+        m = re.search(r"([1-6])[-/. ]*([1-6])[-/. ]*([1-6])", pp_text)
+        if m:
+            info["post_pick"] = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
 
     return info
 
@@ -578,294 +594,7 @@ def finalizar(ds, ctx):
 # AVB
 # =====================================================================
 
-def forca(V, D, ctx):
-    pp = ctx.get("post_pick", [])
-    f = (V["overall"] - D["overall"])
-    f += 100.0 * ((D["mtime"] or 0) - (V["mtime"] or 0))
-    f += ((V["rec"] or 0) - (D["rec"] or 0)) / 2.0
-    f += (V["cat"] - D["cat"]) * 2.0
-    notes = []
-    if V["estilo"] == "Rápido" and D["estilo"] != "Rápido":
-        f += 5; notes.append("+5 Rápido")
-    key = tuple(sorted([V["name"], D["name"]]))
-    h = ctx["h2h"].get(key)
-    if h and h[0] == V["name"]:
-        f += 5; notes.append("+5 H2H")
-    if V["estilo"] == "Rápido" and D["estilo"] == "Rápido" and V["trap"] in (1, 2, 3):
-        f += 5; notes.append("+5 trap interna")
-    if V["estilo"] == "Fecha forte" and D["estilo"] == "Rápido" and D["trap"] in (1, 2, 3):
-        f -= 5; notes.append("−5 Fecha forte vs Rápido interno")
-    sd = float(np.clip(10.0 * (D["sd"] - V["sd"]), -5, 5))
-    f += sd
-    if abs(sd) >= 0.05:
-        notes.append(f"{sd:+.1f} desvio")
-    if V["trap"] in pp and (D["trap"] not in pp or pp.index(V["trap"]) < pp.index(D["trap"])):
-        f += 5; notes.append("+5 Post Pick")
-    if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]):
-        f += 5; notes.append("+5 Trap Vazia")
-    return f, notes
-
-def avb_valido(V, D, ctx):
-    """
-    Critérios obrigatórios para o galgo vencedor (V) no AvB:
-    1. Média Split no Top 3 da prova
-    2. Média Split menor (mais rápida) do que a do desafiante (D)
-    3. Recuperação Média maior do que a do desafiante (D)
-    """
-    top3_ms = ctx.get("top3_ms", set())
-    
-    if V["name"] not in top3_ms:
-        return False
-        
-    if V["msplit"] is None or D["msplit"] is None or V["msplit"] >= D["msplit"]:
-        return False
-        
-    if V["rec"] is None or D["rec"] is None or V["rec"] <= D["rec"]:
-        return False
-        
-    return True
-
-def montar_avbs(rank, ctx):
-    elig = [d for d in rank if d["elegivel"]]
-    elite = {}
-    slots = [(3, 4), (4, 5), (5, 6)]
-    for k, poss in enumerate(slots):
-        if k >= len(elig):
-            break
-        V = elig[k]
-        for p in poss:
-            if p <= len(rank):
-                D = rank[p - 1]
-                if D is not V and D["overall"] < V["overall"]:
-                    elite[(V["name"], D["name"])] = (V, D)
-                    
-    alvos = [d for d in rank if d["alvo"]]
-    s1, s2, s3 = [], [], []
-    
-    for (V, D) in elite.values():
-        if not avb_valido(V, D, ctx):
-            continue
-        f, n = forca(V, D, ctx)
-        if D["alvo"]:
-            continue
-        if f >= CFG["FORCA_PRINCIPAL"]:
-            s2.append((V, D, f, n, False))
-        elif f >= CFG["FORCA_SECUNDARIO"]:
-            s3.append((V, D, f, n, False))
-            
-    for A in alvos:
-        for V in elig:
-            if V is A or V["overall"] <= A["overall"]:
-                continue
-            if not avb_valido(V, A, ctx):
-                continue
-            f, n = forca(V, A, ctx)
-            if f >= CFG["FORCA_PRINCIPAL"]:
-                s1.append((V, A, f, n, (V["name"], A["name"]) in elite))
-                
-    for (V, D) in elite.values():
-        if D["alvo"]:
-            if not avb_valido(V, D, ctx):
-                continue
-            f, n = forca(V, D, ctx)
-            if CFG["FORCA_SECUNDARIO"] <= f < CFG["FORCA_PRINCIPAL"]:
-                s3.append((V, D, f, n, False))
-                
-    key = lambda x: -x[2]
-    return sorted(s1, key=key), sorted(s2, key=key), sorted(s3, key=key)
-
-# =====================================================================
-# EXIBICAO
-# =====================================================================
-
-CSS = """
-<style>
-.dib-wrap{overflow-x:auto;border:1px solid rgba(128,128,128,.35);border-radius:10px;margin:6px 0 14px}
-.dib{border-collapse:separate;border-spacing:0;font-size:13px;width:max-content;min-width:100%}
-.dib th,.dib td{padding:6px 9px;border-bottom:1px solid rgba(128,128,128,.25);white-space:nowrap;text-align:center;vertical-align:middle}
-.dib th{background:rgba(128,128,128,.15);font-weight:600}
-.dib td.l,.dib th.l{text-align:left;font-weight:600}
-.dib .s1{position:sticky;left:0;z-index:2;background-color:#0e1117 !important;}
-.dib .s2{position:sticky;left:46px;z-index:2;background-color:#0e1117 !important;box-shadow:2px 0 0 rgba(128,128,128,.35)}
-.dib td.w{white-space:normal;min-width:200px;text-align:left}
-.g{color:#0b8a3b;font-weight:600}.r{color:#c62828;font-weight:600}
-</style>
-"""
-
-def tbl(headers, rows, sticky=True):
-    h = "".join(f"<th class='{'l' if i < 2 else ''}'>{x}</th>" for i, x in enumerate(headers))
-    out = []
-    for row in rows:
-        cells = []
-        for i, c in enumerate(row):
-            cls = ""
-            if sticky and i == 0: cls = " class='s1'"
-            elif sticky and i == 1: cls = " class='s2 l'"
-            cells.append(f"<td{cls}>{c}</td>")
-        out.append("<tr>" + "".join(cells) + "</tr>")
-    return f"<div class='dib-wrap'><table class='dib'><tr>{h}</tr>{''.join(out)}</table></div>"
-
-def ranks_low(values):
-    idx = [i for i, v in enumerate(values) if v is not None]
-    out = [None] * len(values)
-    for i in idx:
-        out[i] = 1 + sum(1 for j in idx if round(values[j], 2) < round(values[i], 2))
-    return out
-
-def f2(x, n=2):
-    return "n/d" if x is None else f"{x:.{n}f}"
-
-def nome_marcado(d):
-    n = html.escape(d["name"])
-    if d.get("bloqueado") or d.get("trial_block"):
-        n = "[BLOQUEADO] " + n
-    if d.get("alvo"):
-        n = "🎯 " + n
-    return n
-
-def trap_label(d):
-    return f"{TRAP_EMOJI.get(d['trap'], '')} {d['trap']}"
-
-def tabela_projecao(ds):
-    cols = ["split", "time", "tadj", "msplit", "mtime", "ritmo"]
-    rk = {}
-    for c in cols:
-        vals = [None if d["nd"] else d[c] for d in ds]
-        rk[c] = ranks_low(vals)
-    rows = []
-    for i, d in enumerate(ds):
-        if d["nd"]:
-            rows.append([trap_label(d), html.escape(d["name"]), "n/d"] + ["-"] * 15)
-            continue
-
-        def cell(c, n=2):
-            r = rk[c][i]
-            return f"{RANK_EMOJI.get(r, '🔴') if r else ''} {f2(d[c], n)}".strip()
-        fat = "<br>".join(f"{k} {v:+.1f}" for k, v in d["fatores"]) or "-"
-        if d["remark_tags"]:
-            fat += "<br>" + ", ".join(d["remark_tags"]) + f" {d['remark_pts']:+.1f}"
-        perfil_e = {"Limpo": "✅", "Irregular": "⚠️", "Trombador": "🔴"}[d["perfil"]]
-        medal = MEDALS.get(d["pos"], f"{d['pos']}º")
-        rows.append([
-            trap_label(d), nome_marcado(d), f"{medal} {d['overall']:.2f}",
-            f"{d['cat']:.2f}" + (f" ({d['cat_mod']:+.0f})" if d.get("cat_mod") else ""),
-            f"<span style='white-space:normal'>{fat}</span>",
-            f"{perfil_e} {d['perfil']} ({d['n_traf']})", d["hist"], f2(d["posmed"], 1),
-            f"{f2(d['peso'], 1)} ({d['peso_pts']:+.0f})", f"{d['dias']} ({d['dias_pts']:+.0f})",
-            cell("split"), cell("time"), cell("tadj"), cell("msplit"), cell("mtime"), cell("ritmo"),
-            d["rec_txt"], f"{d['conf']:.0f}%",
-        ])
-    heads = ["Trap", "Galgo", "Overall", "Categoria", "Fatores", "Perfil", "Histórico", "Posição Med.",
-             "Peso", "Dias", "Split", "Time", "Time Ajustado", "Média Split", "Média Time",
-             "Ritmo final", "Recup. Média", "Confiança"]
-    return tbl(heads, rows)
-
-def classificacao(rank):
-    partes = []
-    for d in rank:
-        m = MEDALS.get(d["pos"], f"{d['pos']}º")
-        partes.append(f"{m} {TRAP_EMOJI.get(d['trap'], '')} {d['trap']}")
-    return " > ".join(partes)
-
-def stack(vv, dv, fmt, better="low", sign=True):
-    if vv is None or dv is None:
-        return f"{'n/d' if vv is None else fmt(vv)}<br>{'n/d' if dv is None else fmt(dv)}"
-    diff = vv - dv
-    good = (diff < 0) if better == "low" else (diff > 0)
-    cls = "" if abs(diff) < 1e-9 or better is None else ("g" if good else "r")
-    dtxt = f" ({diff:+.2f})" if sign else ""
-    return f"<span class='{cls}'>{fmt(vv)}{dtxt}</span><br>{fmt(dv)}"
-
-def tabela_avb(lista, titulo, ctx):
-    st.markdown(f"#### {titulo}")
-    if not lista:
-        st.info("Nenhum AVB nesta categoria.")
-        return
-    rows = []
-    for (V, D, f, notes, star) in lista:
-        pv = lambda x: f"{x:.2f}"
-        rows.append([
-            f"{'⭐ ' if star else ''}{trap_label(V)} vence {trap_label(D)}<br>"
-            f"<span style='font-weight:400'>{html.escape(V['name'])} vs {html.escape(D['name'])}</span>",
-            stack(V["overall"], D["overall"], pv, "high"),
-            stack(V["cat"], D["cat"], pv, "high"),
-            f"{V['perfil']}<br>{D['perfil']}",
-            f"{V['hist']}<br>{D['hist']}",
-            stack(V["posmed"], D["posmed"], lambda x: f"{x:.1f}", "low"),
-            stack(V["peso"], D["peso"], lambda x: f"{x:.1f}", None),
-            f"{V['dias']}<br>{D['dias']}",
-            stack(V["split"], D["split"], pv, "low"),
-            stack(V["time"], D["time"], pv, "low"),
-            stack(V["tadj"], D["tadj"], pv, "low"),
-            stack(V["msplit"], D["msplit"], pv, "low"),
-            stack(V["mtime"], D["mtime"], pv, "low"),
-            stack(V["ritmo"], D["ritmo"], pv, "low"),
-            f"{V['rec_txt']}<br>{D['rec_txt']}",
-            f"{V['conf']:.0f}%<br>{D['conf']:.0f}%",
-            f"<b>{f:.2f}</b><br><span style='font-size:11px;white-space:normal'>{', '.join(notes)}</span>",
-        ])
-    heads = ["AvB", "Overall", "Categoria", "Perfil", "Histórico", "Posição Med.", "Peso", "Dias",
-             "Split", "Time", "Time Ajustado", "Média Split", "Média Tempo", "Ritmo final",
-             "Recup. Média", "Confiança", "Força"]
-    st.markdown(tbl(heads, rows), unsafe_allow_html=True)
-
-def observacoes(rank):
-    out = []
-    for d in rank:
-        pos, neg = [], []
-        if d["perfil"] == "Limpo": pos.append("perfil limpo")
-        if d["perfil"] == "Trombador": neg.append(f"trombador ({d['n_traf']} ocorrências)")
-        if d["rec"] is not None and d["rec"] > 0: pos.append(f"recupera posições ({d['rec']:+.1f}%)")
-        if d["rec"] is not None and d["rec"] <= 0: neg.append(f"não recupera ({d['rec']:+.1f}%)")
-        pos += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v > 0]
-        neg += [f"{k} ({v:+.1f})" for k, v in d["fatores"] if v < 0]
-        if d["remark_tags"]: (neg if d["remark_pts"] < 0 else pos).append(", ".join(d["remark_tags"]))
-        if d["bloqueado"]: neg.append(f"confiança {d['conf']:.0f}% (bloqueado como vencedor)")
-        if d["trial_block"]: neg.append("última corrida foi trial (bloqueado como vencedor)")
-        if d["name"] not in st.session_state.get("top3_ms_names", set()): neg.append("Média Split fora do Top 3 (bloqueado como vencedor)")
-        if d["alvo"]: neg.append("alvo: Média Split fora do Top 3 e Recup ≤ 0")
-        if d["dias_pts"] or d["peso_pts"]: neg.append(f"dias {d['dias']} ({d['dias_pts']:+.0f}), peso Δ{f2(d['peso_var'],1)} ({d['peso_pts']:+.0f})")
-        out.append(f"- **{trap_label(d)} {d['name']}** — ➕ {'; '.join(pos) or '-'} | ➖ {'; '.join(neg) or '-'}")
-    return "\n".join(out)
-
-def hora_br(hhmm):
-    if not hhmm:
-        return None
-    s = str(hhmm).strip()
-    m = re.match(r"^(\d{1,2}):(\d{2})", s)
-    if not m:
-        return None
-    h_val = int(m.group(1))
-    m_val = int(m.group(2))
-    if h_val < 9:
-        h_val += 12
-    t = datetime(2000, 1, 1, h_val, m_val) - timedelta(hours=3)
-    return t.strftime("%H:%M")
-
-# =====================================================================
-# APP
-# =====================================================================
-
-def mostrar_diagnostico(dogs, meta):
-    st.markdown("**Campos lidos do JSON** (se algum estiver 0, ajuste o `FIELD_MAP` no topo do código):")
-    st.dataframe(diagnostico_campos(dogs), use_container_width=True, hide_index=True)
-    st.markdown("**Chaves da primeira corrida do primeiro galgo (JSON bruto):**")
-    first = meta["raw_first"]
-    st.json(first.get("forms", [{}])[0] if first.get("forms") else first)
-    linhas = [{"Galgo": d["name"], "Trap": d["trap"], **{k: r[k] for k in
-              ["date_str", "track", "dist", "grade", "split", "bends", "fin", "by", "wntm", "gng",
-               "weight", "remarks", "caltm"]}} for d in dogs for r in d["runs"]]
-    st.dataframe(pd.DataFrame(linhas), use_container_width=True)
-
-def main():
-    st.set_page_config(page_title="DIB 2.7 - Projeção", layout="wide")
-    st.title("🐾 Análise DIB 2.7")
-    st.markdown(CSS, unsafe_allow_html=True)
-
-    st.subheader("🔗 Cole o link da corrida do Racing Post")
-    url = st.text_input("Link da corrida", placeholder="https://greyhoundbet.racingpost.com/#card/...")
-
-    if "s_pista" not in st.session_state: st.session_state["s_pista"] = ""
+st.session_state: st.session_state["s_pista"] = ""
     if "s_hora" not in st.session_state: st.session_state["s_hora"] = ""
     if "s_race" not in st.session_state: st.session_state["s_race"] = ""
     if "s_classe" not in st.session_state: st.session_state["s_classe"] = ""
