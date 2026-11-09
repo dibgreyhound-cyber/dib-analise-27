@@ -569,8 +569,8 @@ CSS = """
 .dib th,.dib td{padding:6px 9px;border-bottom:1px solid rgba(128,128,128,.25);white-space:nowrap;text-align:center;vertical-align:middle}
 .dib th{background:rgba(128,128,128,.15);font-weight:600}
 .dib td.l,.dib th.l{text-align:left;font-weight:600}
-.dib .s1{position:sticky;left:0;z-index:2;background:inherit;}
-.dib .s2{position:sticky;left:46px;z-index:2;background:inherit;box-shadow:2px 0 0 rgba(128,128,128,.35)}
+.dib .s1{position:sticky;left:0;z-index:2;background-color:#0e1117 !important;}
+.dib .s2{position:sticky;left:46px;z-index:2;background-color:#0e1117 !important;box-shadow:2px 0 0 rgba(128,128,128,.35)}
 .dib td.w{white-space:normal;min-width:200px;text-align:left}
 .g{color:#0b8a3b;font-weight:600}.r{color:#c62828;font-weight:600}
 </style>
@@ -794,4 +794,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+   
