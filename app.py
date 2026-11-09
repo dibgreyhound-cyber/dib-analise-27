@@ -35,7 +35,8 @@ CFG = {
     "H2H": 1.0, "H2H_MARGEM_GRANDE": 3.0, "H2H_GRANDE": 2.0,
     "MOMENTUM_VITORIA": 3.0, "MOMENTUM_DERROTA": -2.0, "DERROTA_POS_MIN": 5,
     "PESO_DIAS_NO_OVERALL": True,      # soma os pontos de Peso e Dias no Overall
-    "FORCA_PRINCIPAL": 50.0, "FORCA_SECUNDARIO": 40.0,
+    "FORCA_PRINCIPAL": 50.0, 
+    "FORCA_SECUNDARIO": 45.0,          # Ajustado para 45.0
     "CONF_MIN_VENCEDOR": 60.0,
 }
 
@@ -786,7 +787,7 @@ def main():
             s1, s2, s3 = montar_avbs(rank, ctx)
             tabela_avb(s1, "1ª Planilha — AVB do Alvo 🎯 (Força ≥ 50)", ctx)
             tabela_avb(s2, "2ª Planilha — AVB Principal (Elite, Força ≥ 50)", ctx)
-            tabela_avb(s3, "3ª Planilha — AVB Secundário (Elite, Força 40,0 a 49,9)", ctx)
+            tabela_avb(s3, "3ª Planilha — AVB Secundário (Elite, Força 45,0 a 49,9)", ctx)
             st.markdown("#### Observações")
             st.markdown(observacoes(rank))
         with tab_d:
@@ -794,4 +795,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-   
