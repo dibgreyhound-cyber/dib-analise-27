@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao de metadados focada no padrao de horario (HH:MM)
+- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick)
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -177,7 +177,7 @@ def wmean(vals, ws):
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
 # =====================================================================
-# EXTRACAO (Racing Post - Varredura por Formato HH:MM)
+# EXTRACAO (Racing Post - Extração Cirúrgica de Metadados)
 # =====================================================================
 
 HINTS = {
@@ -246,8 +246,8 @@ def descobrir_chaves(dogs):
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    fontes = []
-    for src in [info_card, data]:
+    fontes = [info_card] if isinstance(info_card, dict) else []
+    for src in [data]:
         if isinstance(src, dict):
             fontes.append(src)
             if isinstance(src.get("race"), dict):
@@ -266,32 +266,17 @@ def extrair_metadados_json(data, info_card, dogs):
     if not info["pista"] and dogs and dogs[0].get("runs"):
         info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
 
-    # 2. Horário da Prova (Varredura estricta pelo formato H:MM ou HH:MM)
+    # 2. Horário da Prova (Foco estrito nas chaves dedicadas)
     for src in fontes:
-        t_raw = pick(src, ["offTime", "displayTime", "time", "raceTime", "scheduledTime"])
-        if t_raw:
-            m = re.search(r"\b(\d{1,2}:\d{2})\b", str(t_raw))
-            if m:
-                info["hora"] = m.group(1)
-                break
-    if not info["hora"]:
-        # Varredura recursiva em todo o JSON procurando qualquer string no formato HH:MM (ex: 7:22)
-        def achar_formato_hora(obj):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if isinstance(v, str):
-                        m = re.search(r"\b([1-9]|1[0-2]):\d{2}\b", v)
-                        if m:
-                            return m.group(0)
-                    elif isinstance(v, (dict, list)):
-                        res = achar_formato_hora(v)
-                        if res: return res
-            elif isinstance(obj, list):
-                for item in obj:
-                    res = achar_formato_hora(item)
-                    if res: return res
-            return ""
-        info["hora"] = achar_formato_hora(data) or achar_formato_hora(info_card)
+        for k in ["offTime", "scheduledTime", "displayTime", "time", "raceTime"]:
+            val = src.get(k)
+            if val:
+                m = re.search(r"\b([1-9]|1[0-2]):\d{2}\b", str(val))
+                if m:
+                    info["hora"] = m.group(0)
+                    break
+        if info["hora"]:
+            break
 
     # 3. Número da Race
     for src in fontes:
@@ -553,7 +538,7 @@ def finalizar(ds, ctx):
         d["vel"] = (pts_item("tadj", V["adj"], d) + pts_item("mtime", V["mtime"], d)
                     + pts_item("msplit", V["msplit"], d) + pts_item("ritmo", V["ritmo"], d))
         d["perfil_pts"] = CFG["PERFIL_PTS"][d["perfil"]]
-        d["rec_pts"] = CFG["RECUP_PTS"](d["rec"])
+        d["rec_pts"] = CFG["RECUP_PTS"][d["rec"]] if "rec" in d and d["rec"] is not None else 5.0
         fat = []
         t = d["trap"]
         if any(abs(t - v) == 1 for v in vac):
@@ -902,11 +887,11 @@ def main():
     with st.sidebar:
         st.header("Dados da corrida")
         pista = st.text_input("Pista", key="s_pista")
-        hora = st.text_input("Horário da pista (ex.: 7:22)", key="s_hora")
+        hora = st.text_input("Horário da pista (ex.: 11:04)", key="s_hora")
         race = st.text_input("Race nº", key="s_race")
-        classe = st.text_input("Classe de hoje (ex.: A5)", key="s_classe")
+        classe = st.text_input("Classe de hoje (ex.: D4)", key="s_classe")
         dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 3-6-4)", key="s_pp")
+        pp_in = st.text_input("Post Pick (ex.: 2-4-3)", key="s_pp")
 
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
