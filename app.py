@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick)
+- Extracao cirurgica de metadados (Pista, Horario, Race, Classe, Post Pick) do objeto race
 - Calculo: regras do DIB 2.7 (projecao + 3 planilhas de AVB com filtros de Split e Recuperacao)
 - Exibicao: tabelas otimizadas com colunas fixas e fundo escuro solido
 """
@@ -62,7 +62,7 @@ RANK_EMOJI = {1: "🟢", 2: "🟡", 3: "⚪", 4: "🔵", 5: "🟠", 6: "🔴"}
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 # =====================================================================
-# UTILIDADES DE LEITURA E EXTRACAO CIRURGICA
+# UTILIDADES DE LEITURA E EXTRACAO
 # =====================================================================
 
 def pick(d, keys, default=None):
@@ -177,7 +177,7 @@ def wmean(vals, ws):
     return sum(v * w for v, w in pairs) / sum(w for _, w in pairs) if pairs else None
 
 # =====================================================================
-# EXTRACAO (Racing Post - Abordagem Cirurgica)
+# EXTRACAO (Racing Post - Abordagem Robustecida no Objeto Race)
 # =====================================================================
 
 HINTS = {
@@ -243,83 +243,66 @@ def descobrir_chaves(dogs):
                 FIELD_MAP["grade"].insert(0, k)
             break
 
-def extrair_horario_corrida(info_card, data):
-    chaves = ["offTime", "displayTime", "raceTime", "scheduledTime", "time"]
-    for src in [info_card, data]:
-        if not isinstance(src, dict):
-            continue
-        for k in chaves:
-            val = src.get(k)
-            if val:
-                m = re.search(r"(\d{1,2}:\d{2})", str(val))
-                if m:
-                    return m.group(1)
-    return ""
-
 def extrair_metadados_json(data, info_card, dogs):
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
-    # 1. Pista
-    pista = None
+    # Recolher fontes potenciais de metadados na ordem correta (incluindo sub-dicionários 'race' e 'form')
+    fontes = []
     for src in [info_card, data]:
         if isinstance(src, dict):
-            for k in ["trackName", "track", "meetingName", "courseName"]:
-                if src.get(k):
-                    pista = src.get(k)
-                    break
-        if pista: break
-    if not pista and dogs and dogs[0].get("runs"):
-        pista = dogs[0]["runs"][0].get("track")
-    info["pista"] = str(pista or "Desconhecida").strip()
-    
-    # 2. Horário da Prova (Uso da função cirúrgica recomendada)
-    info["hora"] = extrair_horario_corrida(info_card, data)
+            fontes.append(src)
+            if isinstance(src.get("race"), dict):
+                fontes.append(src["race"])
+            if isinstance(src.get("form"), dict):
+                fontes.append(src["form"])
+                if isinstance(src["form"].get("race"), dict):
+                    fontes.append(src["form"]["race"])
+
+    # 1. Pista
+    for src in fontes:
+        pista = pick(src, ["trackName", "track", "meetingName", "courseName"])
+        if pista:
+            info["pista"] = str(pista).strip()
+            break
+    if not info["pista"] and dogs and dogs[0].get("runs"):
+        info["pista"] = str(dogs[0]["runs"][0].get("track", "Desconhecida")).strip()
+
+    # 2. Horário da Prova
+    for src in fontes:
+        t_raw = pick(src, ["offTime", "displayTime", "time", "raceTime", "scheduledTime"])
+        if t_raw:
+            m = re.search(r"(\d{1,2}:\d{2})", str(t_raw))
+            if m:
+                info["hora"] = m.group(1)
+                break
 
     # 3. Número da Race
-    r_num = None
-    for src in [info_card, data]:
-        if isinstance(src, dict):
-            for k in ["raceNum", "raceNumber", "rNum", "raceNumberDesc"]:
-                if src.get(k) is not None:
-                    r_num = src.get(k)
-                    break
-        if r_num is not None: break
-    if r_num is not None:
-        info["race"] = str(r_num).replace("Race", "").strip()
+    for src in fontes:
+        r_num = pick(src, ["raceNum", "raceNumber", "rNum", "raceNumberDesc", "number"])
+        if r_num is not None:
+            info["race"] = str(r_num).replace("Race", "").strip()
+            break
 
     # 4. Classe (Grade)
-    grade = None
-    for src in [info_card, data]:
-        if isinstance(src, dict):
-            for k in ["raceClass", "grade", "class", "raceClassDesc"]:
-                if src.get(k):
-                    grade = src.get(k)
-                    break
-        if grade: break
-    if not grade and dogs and dogs[0].get("runs"):
-        grade = dogs[0]["runs"][0].get("grade")
-    info["classe"] = str(grade or "").strip().upper()
+    for src in fontes:
+        grade = pick(src, ["raceClass", "grade", "class", "raceClassDesc", "raceGrade"])
+        if grade:
+            info["classe"] = str(grade).strip().upper()
+            break
+    if not info["classe"] and dogs and dogs[0].get("runs"):
+        info["classe"] = str(dogs[0]["runs"][0].get("grade", "")).strip().upper()
 
     # 5. Post Pick
-    pp_val = None
-    for src in [info_card, data]:
-        if isinstance(src, dict):
-            for k in ["postPick", "post_pick"]:
-                if src.get(k):
-                    pp_val = str(src.get(k))
-                    break
-            if pp_val: break
-            
-            for k, v in src.items():
-                if isinstance(v, str):
-                    m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", v)
-                    if m:
-                        pp_val = m.group(1)
-                        break
-        if pp_val: break
-
-    if pp_val:
-        info["post_pick"] = pp_val.strip().replace("/", "-").replace(".", "-")
+    for src in fontes:
+        pp = pick(src, ["postPick", "post_pick", "tips", "tip"])
+        if pp:
+            m = re.search(r"\b([1-6][-/.][1-6][-/.][1-6])\b", str(pp))
+            if m:
+                info["post_pick"] = m.group(1).strip().replace("/", "-").replace(".", "-")
+                break
+            elif re.search(r"[1-6]", str(pp)):
+                info["post_pick"] = str(pp).strip().replace("/", "-").replace(".", "-")
+                break
 
     return info
 
@@ -902,11 +885,11 @@ def main():
     with st.sidebar:
         st.header("Dados da corrida")
         pista = st.text_input("Pista", key="s_pista")
-        hora = st.text_input("Horário da pista (ex.: 6:14)", key="s_hora")
+        hora = st.text_input("Horário da pista (ex.: 7:22)", key="s_hora")
         race = st.text_input("Race nº", key="s_race")
-        classe = st.text_input("Classe de hoje (ex.: A3)", key="s_classe")
+        classe = st.text_input("Classe de hoje (ex.: A5)", key="s_classe")
         dist_in = st.number_input("Distância de hoje (m, 0 = detectar)", 0, 1000, 0)
-        pp_in = st.text_input("Post Pick (ex.: 2-4-3)", key="s_pp")
+        pp_in = st.text_input("Post Pick (ex.: 3-6-4)", key="s_pp")
 
     if "dib_data" not in st.session_state:
         st.info("👈 Cole o link do Racing Post acima e clique em **Analisar Corrida** para carregar os dados e as projeções.")
