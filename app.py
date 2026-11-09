@@ -244,7 +244,6 @@ def descobrir_chaves(dogs):
             break
 
 def extrair_metadados_json(data, info_card, dogs):
-    """Extrai pista, horario, race, classe e post pick vasculhando o JSON e a API geral de card."""
     info = {"pista": "", "hora": "", "race": "", "classe": "", "post_pick": ""}
     
     # 1. Pista
@@ -254,10 +253,17 @@ def extrair_metadados_json(data, info_card, dogs):
         pista = dogs[0]["runs"][0].get("track")
     info["pista"] = str(pista or "Desconhecida").strip()
     
-    # 2. Horário da prova (Procura chaves específicas ou varredura de hora válida no formato HH:MM)
-    t_raw = (info_card.get("raceTime") or info_card.get("time") or info_card.get("offTime") or 
-             data.get("raceTime") or data.get("time") or data.get("offTime") or data.get("displayTime"))
-    
+    # 2. Horário da Prova (priorizando offTime, displayTime ou time)
+    t_raw = None
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            for k in ["offTime", "displayTime", "time", "raceTime", "scheduledTime"]:
+                val = src.get(k)
+                if val and re.search(r"\d{1,2}:\d{2}", str(val)):
+                    t_raw = str(val)
+                    break
+        if t_raw: break
+        
     if not t_raw:
         def achar_hora(obj):
             nonlocal t_raw
@@ -266,8 +272,6 @@ def extrair_metadados_json(data, info_card, dogs):
                     kl = str(k).lower()
                     if any(x in kl for x in ("time", "off", "hour")) and isinstance(v, str) and re.search(r"\d{1,2}:\d{2}", v):
                         if not t_raw: t_raw = v
-                    elif isinstance(v, (dict, list)):
-                        achar_hora(v)
             elif isinstance(obj, list):
                 for item in obj:
                     achar_hora(item)
@@ -280,44 +284,58 @@ def extrair_metadados_json(data, info_card, dogs):
             info["hora"] = m_time.group(1)
 
     # 3. Número da Race
-    r_num = (info_card.get("raceNum") or info_card.get("raceNumber") or info_card.get("rNum") or 
-             data.get("raceNum") or data.get("raceNumber") or data.get("rNum"))
-    if not r_num:
-        def achar_racenum(obj):
-            nonlocal r_num
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if "racenumber" in k.lower() or "racenum" in k.lower() or k.lower() == "rnum":
-                        r_num = v
-                    elif isinstance(v, (dict, list)):
-                        achar_racenum(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    achar_racenum(item)
-        achar_racenum(data)
-        achar_racenum(info_card)
-    if r_num:
+    r_num = None
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            for k in ["raceNum", "raceNumber", "rNum", "raceNumberDesc"]:
+                val = src.get(k)
+                if val is not None:
+                    r_num = val
+                    break
+        if r_num is not None: break
+    if r_num is not None:
         info["race"] = str(r_num).replace("Race", "").strip()
 
     # 4. Classe (Grade)
-    grade = (info_card.get("raceClass") or info_card.get("grade") or info_card.get("class") or
-             data.get("raceClass") or data.get("grade"))
+    grade = None
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            for k in ["raceClass", "grade", "class", "raceClassDesc"]:
+                val = src.get(k)
+                if val:
+                    grade = val
+                    break
+        if grade: break
     if not grade and dogs and dogs[0].get("runs"):
         grade = dogs[0]["runs"][0].get("grade")
     info["classe"] = str(grade or "").strip().upper()
 
-    # 5. Post Pick
-    pp_val = (info_card.get("postPick") or info_card.get("post_pick") or 
-              data.get("postPick") or data.get("post_pick"))
+    # 5. Post Pick (Varredura inteligente por chaves ou texto contendo post pick)
+    pp_val = None
+    for src in [info_card, data]:
+        if isinstance(src, dict):
+            for k in ["postPick", "post_pick", "tips", "comment", "raceTitle", "summary", "heading"]:
+                val = src.get(k)
+                if val and isinstance(val, str):
+                    m_pp = re.search(r"(?:post\s*pick[:\s]*)([\d\-_/]+)", val, re.IGNORECASE)
+                    if m_pp:
+                        pp_val = m_pp.group(1)
+                        break
+        if pp_val: break
+
     if not pp_val:
         def achar_pp(obj):
             nonlocal pp_val
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if isinstance(v, str) and "post" in v.lower() and "pick" in v.lower():
+                    if isinstance(v, str):
                         m_pp = re.search(r"(?:post\s*pick[:\s]*)([\d\-_/]+)", v, re.IGNORECASE)
                         if m_pp:
                             pp_val = m_pp.group(1)
+                        elif not pp_val and re.search(r"\b\d+[-/]\d+[-/]\d+\b", v):
+                            m_pp2 = re.search(r"(\b\d+[-/]\d+[-/]\d+\b)", v)
+                            if m_pp2:
+                                pp_val = m_pp2.group(1)
                     elif isinstance(v, (dict, list)):
                         achar_pp(v)
             elif isinstance(obj, list):
@@ -325,6 +343,7 @@ def extrair_metadados_json(data, info_card, dogs):
                     achar_pp(item)
         achar_pp(data)
         achar_pp(info_card)
+
     if pp_val:
         info["post_pick"] = str(pp_val).strip()
 
@@ -347,7 +366,6 @@ def extrair_dados_racingpost(url):
         }
         
         with st.spinner("Buscando dados no Racing Post..."):
-            # 1. Puxa os dados gerais do card/race para pegar horario, post pick e metadados oficiais
             card_api_url = f"https://greyhoundbet.racingpost.com/card/race.sd?race_id={race_id}&r_date={r_date_str}"
             info_card = {}
             try:
@@ -357,7 +375,6 @@ def extrair_dados_racingpost(url):
             except Exception:
                 pass
 
-            # 2. Puxa o bloco de formulários dos cães
             api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id}&r_date={r_date_str}&blocks=form"
             resp = requests.get(api_url, headers=headers, timeout=15)
             resp.raise_for_status()
