@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Extração original mantida + Novas regras de Overall, Fatores, Travas e Probabilidade.
+- Ajuste de responsividade das tabelas (colunas mais finas e texto quebrando linha)
 """
 import re
 import html
@@ -55,7 +55,7 @@ TRAP_EMOJI = {1: "🟥", 2: "🟦", 3: "⬜", 4: "⬛", 5: "🟧", 6: "🔳"}
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 # =====================================================================
-# UTILIDADES DE LEITURA E EXTRACAO (DO SEU CÓDIGO ORIGINAL)
+# UTILIDADES DE LEITURA E EXTRACAO 
 # =====================================================================
 
 def pick(d, keys, default=None):
@@ -71,8 +71,6 @@ def to_float(x):
         return float(s) if s not in ("", "+", "-", ".") else None
     except Exception:
         return None
-
-def going_offset(g): return 0.0 # Desativado
 
 def fin_num(x):
     m = re.search(r"\d+", str(x or ""))
@@ -131,9 +129,6 @@ def first_bend_traffic(rem):
     s = str(rem or "").lower()
     if "baulk" in s: return True
     return any(RE_TRAF.search(p) and "1" in re.findall(r"\d", p) for p in parts_of(rem))
-
-def has_w(rem):
-    return any(re.fullmatch(r"w\d*", t) for t in re.split(r"[,\-&/\s]+", str(rem or "").lower()) if t)
 
 HINTS = {
     "dist": (("dist", "metre", "meter"), ("btn", "beat", "by")),
@@ -338,7 +333,6 @@ def analisar_galgo(dog, ctx):
 
     d["split"], d["time"] = R[0]["split"], R[0]["caltm"]
     
-    # Médias Simples (sem Time Decay)
     valid_splits = [r["split"] for r in R if r["split"] is not None]
     d["msplit"] = float(np.mean(valid_splits)) if valid_splits else None
     
@@ -347,7 +341,6 @@ def analisar_galgo(dog, ctx):
     
     d["ritmo"] = d["mtime"] - d["msplit"] if d["mtime"] and d["msplit"] else None
     
-    # Time Ajustado (Sem Going, com Distância + Tráfego)
     adj_times = []
     for r in R:
         t_pen = traffic_penalty(r["remarks"])
@@ -455,6 +448,13 @@ def montar_avbs(rank, ctx):
     for V in elig:
         for D in elig:
             if V["name"] == D["name"]: continue
+            
+            # PROTEÇÃO CONTRA NONE VALUES
+            if V.get("tadj") is None or D.get("tadj") is None: continue
+            if V.get("mtime") is None or D.get("mtime") is None: continue
+            if V.get("ritmo") is None or D.get("ritmo") is None: continue
+            if V.get("rec") is None or D.get("rec") is None: continue
+            
             prob = calc_prob(V, D, ctx)
             if prob < 55.0: continue
             
@@ -476,7 +476,7 @@ def montar_avbs(rank, ctx):
     return sorted(s1, key=lambda x: -x[2]), sorted(s2, key=lambda x: -x[2]), sorted(s3, key=lambda x: -x[2])
 
 # =====================================================================
-# EXIBIÇÃO E VISUAL
+# EXIBIÇÃO E VISUAL (AJUSTADO PARA NÃO FICAR LARGO)
 # =====================================================================
 
 def get_rank_html(val, rank, invert=False):
@@ -485,19 +485,64 @@ def get_rank_html(val, rank, invert=False):
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
     color = ""
     if invert: 
-        if rank == 1: color = "color:green;font-weight:bold"
-        elif rank >= 5: color = "color:red"
+        if rank == 1: color = "color:#00ff00;font-weight:bold" # Verde mais vivo
+        elif rank >= 5: color = "color:#ff4b4b" # Vermelho do Streamlit
     else: 
-        if rank == 1: color = "color:green;font-weight:bold"
-        elif rank >= 5: color = "color:red"
+        if rank == 1: color = "color:#00ff00;font-weight:bold"
+        elif rank >= 5: color = "color:#ff4b4b"
     return f"<span style='{color}'>{txt}{sup}</span>"
 
+# NOVA FUNÇÃO TBL COM CSS RESPONSIVO
 def tbl(headers, rows):
+    css = """
+    <style>
+    .dib-container {
+        overflow-x: auto;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    .dib-table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: center;
+        font-size: 12px;
+        table-layout: auto;
+    }
+    .dib-table th, .dib-table td {
+        padding: 5px 4px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+        word-wrap: break-word;
+        max-width: 85px; /* Limita a largura para o texto quebrar */
+        min-width: 35px;
+        line-height: 1.2;
+    }
+    .dib-table th {
+        background-color: rgba(128, 128, 128, 0.1);
+        font-weight: 600;
+        white-space: nowrap; /* Cabeçalho não quebra */
+    }
+    .dib-table td.sep {
+        padding: 0;
+        height: 2px;
+        background-color: rgba(128, 128, 128, 0.3);
+    }
+    </style>
+    """
+    
     h = "".join(f"<th>{x}</th>" for x in headers)
     out = []
     for row in rows:
-        out.append("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>")
-    return f"<div style='overflow-x:auto;'><table style='width:100%; border-collapse: collapse; text-align:center; font-size:13px;'><tr>{h}</tr>{''.join(out)}</table></div>"
+        # Se for a linha separadora (tem apenas 1 elemento com <hr>)
+        if len(row) == 1 and "<hr" in str(row[0]):
+            out.append(f"<tr><td class='sep' colspan='{len(headers)}'></td></tr>")
+            continue
+            
+        cells = []
+        for c in row:
+            cells.append(f"<td>{c}</td>")
+        out.append("<tr>" + "".join(cells) + "</tr>")
+        
+    return f"{css}<div class='dib-container'><table class='dib-table'><thead><tr>{h}</tr></thead><tbody>{''.join(out)}</tbody></table></div>"
 
 def nome_marcado(d):
     n = html.escape(d["name"])
@@ -554,7 +599,7 @@ def tabela_avb(lista, titulo):
     rows = []
     for i, (V, D, prob, star) in enumerate(lista):
         if i > 0:
-            rows.append(["<hr style='border:0;border-top:1px solid #ccc;margin:0'>"] + ["-"] * 15)
+            rows.append(["<hr>"])
             
         avb_cell = f"{'⭐ ' if star else ''}{trap_label(V)}<br>{trap_label(D)}"
         pv = lambda x: f"{x:.3f}" if x < 10 else f"{x:.2f}"
@@ -627,4 +672,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
