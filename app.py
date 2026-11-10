@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Ajuste para manter os dados em uma única linha (nowrap)
+- Ajuste na cor do ranking: verde apenas no 1º e vermelho apenas no último.
 """
 import re
 import html
@@ -475,23 +475,22 @@ def montar_avbs(rank, ctx):
     return sorted(s1, key=lambda x: -x[2]), sorted(s2, key=lambda x: -x[2]), sorted(s3, key=lambda x: -x[2])
 
 # =====================================================================
-# EXIBIÇÃO E VISUAL (UMA LINHA POR DADO)
+# EXIBIÇÃO E VISUAL (CORRIGIDO: VERMELHO APENAS NO ÚLTIMO)
 # =====================================================================
 
-def get_rank_html(val, rank, invert=False):
+def get_rank_html(val, rank, max_rank):
     if val is None or rank is None: return "-"
     txt = f"{val:.3f}" if val < 10 else f"{val:.2f}"
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
     color = ""
-    if invert: 
-        if rank == 1: color = "color:#00ff00;font-weight:bold"
-        elif rank >= 5: color = "color:#ff4b4b"
-    else: 
-        if rank == 1: color = "color:#00ff00;font-weight:bold"
-        elif rank >= 5: color = "color:#ff4b4b"
+    
+    if rank == 1:
+        color = "color:#00ff00;font-weight:bold" # Verde apenas no melhor
+    elif rank == max_rank and max_rank > 1:
+        color = "color:#ff4b4b" # Vermelho APENAS no último
+        
     return f"<span style='{color}'>{txt}{sup}</span>"
 
-# NOVA FUNÇÃO TBL COM CSS RESPONSIVO (NOWRAP)
 def tbl(headers, rows):
     css = """
     <style>
@@ -510,7 +509,7 @@ def tbl(headers, rows):
     .dib-table th, .dib-table td {
         padding: 8px 6px;
         border-bottom: 1px solid rgba(128, 128, 128, 0.2);
-        white-space: nowrap; /* IMPEDE A QUEBRA DE LINHA */
+        white-space: nowrap;
         line-height: 1.2;
     }
     .dib-table th {
@@ -551,8 +550,11 @@ def trap_label(d):
 def tabela_projecao(ds):
     cols = ["split", "time", "tadj", "msplit", "mtime", "ritmo", "rec"]
     rk = {c: [None]*len(ds) for c in cols}
+    max_rk = {}
+    
     for c in cols:
         vals = [(i, d[c]) for i, d in enumerate(ds) if d.get(c) is not None]
+        max_rk[c] = len(vals) # Guarda o tamanho máximo (último lugar)
         vals.sort(key=lambda x: x[1], reverse=(c == "rec"))
         for rank, (i, _) in enumerate(vals, 1):
             rk[c][i] = rank
@@ -574,13 +576,13 @@ def tabela_projecao(ds):
             f"{d['cat']:.1f} ({d['cat_mod']:+.0f})", fat, f"{perfil_e} {d['perfil']}",
             "-".join((r["grade"] or "?") for r in d["runs"]),
             f"{d['peso']:.1f}", dias_txt,
-            get_rank_html(d["split"], rk["split"][i]),
-            get_rank_html(d["time"], rk["time"][i]),
-            get_rank_html(d["tadj"], rk["tadj"][i]),
-            get_rank_html(d["msplit"], rk["msplit"][i]),
-            get_rank_html(d["mtime"], rk["mtime"][i]),
-            get_rank_html(d["ritmo"], rk["ritmo"][i]),
-            get_rank_html(d["rec"], rk["rec"][i], invert=True) + f"<br><small>{d['rec_txt'].split()[1]}</small>",
+            get_rank_html(d["split"], rk["split"][i], max_rk["split"]),
+            get_rank_html(d["time"], rk["time"][i], max_rk["time"]),
+            get_rank_html(d["tadj"], rk["tadj"][i], max_rk["tadj"]),
+            get_rank_html(d["msplit"], rk["msplit"][i], max_rk["msplit"]),
+            get_rank_html(d["mtime"], rk["mtime"][i], max_rk["mtime"]),
+            get_rank_html(d["ritmo"], rk["ritmo"][i], max_rk["ritmo"]),
+            get_rank_html(d["rec"], rk["rec"][i], max_rk["rec"]) + f"<br><small>{d['rec_txt'].split()[1]}</small>",
             f"{d['conf']:.0f}%"
         ])
     heads = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup. Média", "Conf."]
