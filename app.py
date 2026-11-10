@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Corrigido sinal da diferença (negativo para tempos menores).
+- Auto-detecção de distância, tratamento de trap vazia (vacant) e ajuste de decimais.
 """
 import re
 import html
@@ -287,6 +287,18 @@ def extrair_dados_racingpost(url):
                 "runs": runs,
             })
             
+        # ADICIONA TRAPS VAZIAS
+        existing_traps = {d["trap"] for d in out}
+        for t in range(1, 7):
+            if t not in existing_traps:
+                out.append({
+                    "name": "vacant",
+                    "trap": t,
+                    "peso_atual": None,
+                    "runs": []
+                })
+        out.sort(key=lambda x: x["trap"])
+            
         meta_info = extrair_metadados_json(data, info_card, out)
         return out, {"r_date": r_date_str, "raw_first": dogs[0]}, meta_info
     except Exception as e:
@@ -302,6 +314,10 @@ def oficial(r, ctx):
             and abs(r["dist"] - ctx["dist"]) < 1 and r["caltm"] is not None and r["caltm"] > 0)
 
 def analisar_galgo(dog, ctx):
+    if dog.get("name") == "vacant":
+        return {"name": "vacant", "trap": dog["trap"], "runs": [], "val": [], "nd": True,
+                "conf": 0.0, "bloqueado": False, "alvo": False, "pos": 0, "elegivel": False}
+                
     runs = sorted(dog["runs"], key=lambda r: r["date"] or datetime.min, reverse=True)[:CFG["N_RUNS"]]
     R = [r for r in runs if oficial(r, ctx)]
     
@@ -372,7 +388,7 @@ def analisar_galgo(dog, ctx):
 
 def finalizar(ds, ctx):
     ok = [d for d in ds if not d["nd"]]
-    vac = [t for t in range(1, 7) if t not in {d["trap"] for d in ds}]
+    vac = [t for t in range(1, 7) if t not in {d["trap"] for d in ds if d["name"] != "vacant"}]
     
     ms_rank = sorted([d for d in ok if d["msplit"]], key=lambda x: x["msplit"])
     top3_ms = {d["name"] for d in ms_rank[:3]}
@@ -481,7 +497,6 @@ def montar_avbs(rank, ctx):
 def get_rank_html(val, rank, max_rank):
     if val is None or rank is None: return "-"
     
-    # FORÇANDO DUAS CASAS DECIMAIS EM TODOS OS VALORES
     txt = f"{val:.2f}" 
     
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
@@ -620,10 +635,8 @@ def tabela_avb(lista, titulo):
         diff = val_v - val_d
         
         if val_v <= val_d:
-            # Se for tempo (menor é melhor), a diferença será negativa.
             v_str += f" ({diff:{p}}{suffix})"
         else:
-            # Se for overall, o menor é o desafiante. Mostramos a diferença positiva.
             d_str += f" (+{abs(diff):{p}}{suffix})"
 
         if is_time:
@@ -653,12 +666,10 @@ def tabela_avb(lista, titulo):
         ov_v, ov_d = fmt_pair(V['overall'], D['overall'], is_time=False, precision=1)
         cat_v, cat_d = fmt_pair(V['cat'], D['cat'], is_time=False, precision=1)
         
-        # ALTERADO PARA PRECISION=2
         sp_v, sp_d = fmt_pair(V['split'], D['split'], is_time=True, precision=2) 
         t_v, t_d = fmt_pair(V['time'], D['time'], is_time=True, precision=2)
         ta_v, ta_d = fmt_pair(V['tadj'], D['tadj'], is_time=True, precision=2)
         
-        # ALTERADO PARA PRECISION=2
         ms_v, ms_d = fmt_pair(V['msplit'], D['msplit'], is_time=True, precision=2) 
         mt_v, mt_d = fmt_pair(V['mtime'], D['mtime'], is_time=True, precision=2)
         r_v, r_d = fmt_pair(V['ritmo'], D['ritmo'], is_time=True, precision=2)
@@ -697,18 +708,26 @@ def main():
     with st.sidebar:
         st.header("Dados da Corrida")
         classe = st.text_input("Classe de hoje (ex: A4)", value="A4")
-        dist_in = st.number_input("Distância (m)", value=480)
+        dist_in = st.number_input("Distância (m, 0 = auto)", value=0, step=10)
         pp_in = st.text_input("Post Pick (ex: 1-2-3)", value="")
         
     if st.button("Analisar", type="primary") and url:
         dogs, meta, meta_info = extrair_dados_racingpost(url)
         if dogs:
+            # AUTO DETECÇÃO DE DISTÂNCIA
             dist = float(dist_in)
+            if dist == 0:
+                all_dists = [r["dist"] for d in dogs for r in d["runs"] if r["dist"]]
+                if all_dists:
+                    dist = float(pd.Series(all_dists).mode().iloc[0])
+                else:
+                    dist = 480.0
+
             today = parse_date(meta["r_date"])
             ctx = {
                 "dist": dist, "today": today, "classe_n": grade_num(classe),
                 "post_pick": [int(x) for x in re.findall(r"\d", pp_in)],
-                "vazias": [t for t in range(1, 7) if t not in {d["trap"] for d in dogs}]
+                "vazias": [t for t in range(1, 7) if t not in {d["trap"] for d in dogs if d["name"] != "vacant"}]
             }
             
             ds = [analisar_galgo(d, ctx) for d in dogs]
