@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Ajuste de responsividade das tabelas (colunas mais finas e texto quebrando linha)
+- Ajuste para manter os dados em uma única linha (nowrap)
 """
 import re
 import html
@@ -449,7 +449,6 @@ def montar_avbs(rank, ctx):
         for D in elig:
             if V["name"] == D["name"]: continue
             
-            # PROTEÇÃO CONTRA NONE VALUES
             if V.get("tadj") is None or D.get("tadj") is None: continue
             if V.get("mtime") is None or D.get("mtime") is None: continue
             if V.get("ritmo") is None or D.get("ritmo") is None: continue
@@ -476,7 +475,7 @@ def montar_avbs(rank, ctx):
     return sorted(s1, key=lambda x: -x[2]), sorted(s2, key=lambda x: -x[2]), sorted(s3, key=lambda x: -x[2])
 
 # =====================================================================
-# EXIBIÇÃO E VISUAL (AJUSTADO PARA NÃO FICAR LARGO)
+# EXIBIÇÃO E VISUAL (UMA LINHA POR DADO)
 # =====================================================================
 
 def get_rank_html(val, rank, invert=False):
@@ -485,14 +484,14 @@ def get_rank_html(val, rank, invert=False):
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
     color = ""
     if invert: 
-        if rank == 1: color = "color:#00ff00;font-weight:bold" # Verde mais vivo
-        elif rank >= 5: color = "color:#ff4b4b" # Vermelho do Streamlit
+        if rank == 1: color = "color:#00ff00;font-weight:bold"
+        elif rank >= 5: color = "color:#ff4b4b"
     else: 
         if rank == 1: color = "color:#00ff00;font-weight:bold"
         elif rank >= 5: color = "color:#ff4b4b"
     return f"<span style='{color}'>{txt}{sup}</span>"
 
-# NOVA FUNÇÃO TBL COM CSS RESPONSIVO
+# NOVA FUNÇÃO TBL COM CSS RESPONSIVO (NOWRAP)
 def tbl(headers, rows):
     css = """
     <style>
@@ -509,17 +508,14 @@ def tbl(headers, rows):
         table-layout: auto;
     }
     .dib-table th, .dib-table td {
-        padding: 5px 4px;
+        padding: 8px 6px;
         border-bottom: 1px solid rgba(128, 128, 128, 0.2);
-        word-wrap: break-word;
-        max-width: 85px; /* Limita a largura para o texto quebrar */
-        min-width: 35px;
+        white-space: nowrap; /* IMPEDE A QUEBRA DE LINHA */
         line-height: 1.2;
     }
     .dib-table th {
         background-color: rgba(128, 128, 128, 0.1);
         font-weight: 600;
-        white-space: nowrap; /* Cabeçalho não quebra */
     }
     .dib-table td.sep {
         padding: 0;
@@ -532,7 +528,6 @@ def tbl(headers, rows):
     h = "".join(f"<th>{x}</th>" for x in headers)
     out = []
     for row in rows:
-        # Se for a linha separadora (tem apenas 1 elemento com <hr>)
         if len(row) == 1 and "<hr" in str(row[0]):
             out.append(f"<tr><td class='sep' colspan='{len(headers)}'></td></tr>")
             continue
