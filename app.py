@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Padronização de duas casas decimais em todos os valores.
+- Corrigido sinal da diferença (negativo para tempos menores).
 """
 import re
 import html
@@ -617,13 +617,14 @@ def tabela_avb(lista, titulo):
         v_str = f"{val_v:{p}}{suffix}"
         d_str = f"{val_d:{p}}{suffix}"
         
-        diff = abs(val_v - val_d)
-        diff_str = f" (+{diff:{p}}{suffix})" if not is_pct else f" (+{diff:{p}}%)"
+        diff = val_v - val_d
         
         if val_v <= val_d:
-            v_str += diff_str
+            # Se for tempo (menor é melhor), a diferença será negativa.
+            v_str += f" ({diff:{p}}{suffix})"
         else:
-            d_str += diff_str
+            # Se for overall, o menor é o desafiante. Mostramos a diferença positiva.
+            d_str += f" (+{abs(diff):{p}}{suffix})"
 
         if is_time:
             if val_v < val_d:
