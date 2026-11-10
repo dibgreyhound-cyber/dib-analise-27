@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- AVB atualizado: Separação por linhas (Vencedor e Desafiante), cores inteligentes e diferença no menor valor.
+- AVB atualizado: Nome dos galgos inclusos e coluna Probabilidade mesclada.
 """
 import re
 import html
@@ -541,7 +541,11 @@ def tbl(headers, rows):
             
         cells = []
         for c in row:
-            cells.append(f"<td>{c}</td>")
+            # PROTEÇÃO: Se já for uma tag <td (ex: rowspan), não envelopa de novo
+            if isinstance(c, str) and c.strip().startswith("<td"):
+                cells.append(c)
+            else:
+                cells.append(f"<td>{c}</td>")
         out.append("<tr>" + "".join(cells) + "</tr>")
         
     return f"{css}<div class='dib-container'><table class='dib-table'><thead><tr>{h}</tr></thead><tbody>{''.join(out)}</tbody></table></div>"
@@ -614,21 +618,19 @@ def tabela_avb(lista, titulo):
         diff = abs(val_v - val_d)
         diff_str = f" (+{diff:{p}}{suffix})" if not is_pct else f" (+{diff:{p}}%)"
         
-        # Regra: A diferença vai na frente do número menor
         if val_v <= val_d:
             v_str += diff_str
         else:
             d_str += diff_str
 
-        # Cores
-        if is_time: # Menor é melhor
+        if is_time:
             if val_v < val_d:
                 v_str = f"<span style='color:#00ff00;font-weight:bold'>{v_str}</span>"
                 d_str = f"<span style='color:#ff4b4b'>{d_str}</span>"
             elif val_v > val_d:
                 v_str = f"<span style='color:#ff4b4b'>{v_str}</span>"
                 d_str = f"<span style='color:#00ff00;font-weight:bold'>{d_str}</span>"
-        else: # Maior é melhor (Overall, Recup)
+        else:
             if val_v > val_d:
                 v_str = f"<span style='color:#00ff00;font-weight:bold'>{v_str}</span>"
                 d_str = f"<span style='color:#ff4b4b'>{d_str}</span>"
@@ -642,8 +644,9 @@ def tabela_avb(lista, titulo):
         if i > 0:
             rows.append(["<hr>"])
             
-        avb_v = f"{'⭐ ' if star else ''}{trap_label(V)}"
-        avb_d = f"{trap_label(D)}"
+        # ADIÇÃO DOS NOMES NA COLUNA AVB
+        avb_v = f"{'⭐ ' if star else ''}{trap_label(V)} - {html.escape(V['name'])}"
+        avb_d = f"{trap_label(D)} - {html.escape(D['name'])}"
         
         ov_v, ov_d = fmt_pair(V['overall'], D['overall'], is_time=False, precision=1)
         cat_v, cat_d = fmt_pair(V['cat'], D['cat'], is_time=False, precision=1)
@@ -658,18 +661,21 @@ def tabela_avb(lista, titulo):
         v_grades = "-".join((r["grade"] or "?") for r in V["runs"])
         d_grades = "-".join((r["grade"] or "?") for r in D["runs"])
         
-        # Linha 1: Vencedor
+        # MESCLAGEM DA COLUNA PROBABILIDADE (rowspan=2)
+        prob_cell = f"<td rowspan='2' style='vertical-align:middle;font-weight:bold;font-size:15px;'><span style='color:#00ff00'>{prob:.1f}%</span></td>"
+        
+        # Linha 1: Vencedor (inclui a probabilidade mesclada)
         rows.append([
             avb_v, ov_v, cat_v, V['perfil'], v_grades,
             f"{V['peso']:.1f}", f"{V['dias']}", 
-            sp_v, t_v, ta_v, ms_v, mt_v, r_v, rec_v, f"{V['conf']:.0f}%", f"<b>{prob:.1f}%</b>"
+            sp_v, t_v, ta_v, ms_v, mt_v, r_v, rec_v, f"{V['conf']:.0f}%", prob_cell
         ])
         
-        # Linha 2: Desafiante
+        # Linha 2: Desafiante (sem a coluna de probabilidade)
         rows.append([
             avb_d, ov_d, cat_d, D['perfil'], d_grades,
             f"{D['peso']:.1f}", f"{D['dias']}", 
-            sp_d, t_d, ta_d, ms_d, mt_d, r_d, rec_d, f"{D['conf']:.0f}%", f"{100-prob:.1f}%"
+            sp_d, t_d, ta_d, ms_d, mt_d, r_d, rec_d, f"{D['conf']:.0f}%"
         ])
         
     heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
