@@ -2,10 +2,12 @@
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
 - Atualizado com as novas regras de Overall, Fatores, Médias Simples, Travas e Probabilidade Normal (CDF).
+- Corrigido erro de extração JSON do Racing Post (Headers e Tratamento de Exceção).
 """
 import re
 import html
 import math
+import json
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -128,7 +130,6 @@ def first_bend_traffic(rem):
     return any(RE_TRAF.search(p) and "1" in re.findall(r"\d", p) for p in parts_of(rem))
 
 def wmean(vals):
-    # Alterado para média aritmética simples
     valid = [v for v in vals if v is not None]
     return float(np.mean(valid)) if valid else None
 
@@ -161,7 +162,7 @@ def norm_run(f):
     }
 
 # =====================================================================
-# EXTRAÇÃO RACING POST
+# EXTRAÇÃO RACING POST (CORRIGIDO)
 # =====================================================================
 
 def extrair_dados_racingpost(url):
@@ -170,14 +171,35 @@ def extrair_dados_racingpost(url):
         r_date_match = re.search(r"r_date=([\d-]+)", url)
         if not race_id_match or not r_date_match:
             st.error("Link inválido. Precisa ter 'race_id' e 'r_date'.")
-            return None, None, None
+            return None, None
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://greyhoundbet.racingpost.com/",
+        }
         
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id_match.group(1)}&r_date={r_date_match.group(1)}&blocks=form"
-        resp = requests.get(api_url, headers=headers, timeout=15)
-        data = resp.json()
+        with st.spinner("Buscando dados no Racing Post..."):
+            api_url = f"https://greyhoundbet.racingpost.com/card/blocks.sd?race_id={race_id_match.group(1)}&r_date={r_date_match.group(1)}&blocks=form"
+            
+            resp = requests.get(api_url, headers=headers, timeout=15)
+            
+            if resp.status_code != 200:
+                st.error(f"Erro na API do Racing Post (Status {resp.status_code}). O site pode estar bloqueando temporariamente.")
+                return None, None
+            
+            try:
+                data = resp.json()
+            except json.JSONDecodeError:
+                st.error("Erro: O Racing Post não retornou dados válidos (JSON). Tente novamente em alguns segundos.")
+                return None, None
 
         dogs = data.get("form", {}).get("dogs", [])
+        if not dogs:
+            st.warning("Nenhum dado encontrado para esta corrida.")
+            return None, None
+            
         out = []
         for dog in dogs:
             out.append({
@@ -190,7 +212,7 @@ def extrair_dados_racingpost(url):
         meta = {"r_date": r_date_match.group(1)}
         return out, meta
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro inesperado na extração: {e}")
         return None, None
 
 # =====================================================================
@@ -210,9 +232,10 @@ def analisar_galgo(dog, ctx):
     
     ultima_any = runs[0] if runs else None
     d["dias"] = (ctx["today"] - ultima_any["date"]).days if ultima_any and ultima_any["date"] else 0
+    
+    # Trava de Forma: Última é T E tem >= 2 T no histórico
     d["forma_trial"] = False
     if ultima_any and re.match(r"^T", ultima_any["grade"] or ""):
-        # Trava de forma: Última é T E tem >= 2 T no histórico
         count_t = sum(1 for r in runs if re.match(r"^T", r["grade"] or ""))
         if count_t >= 2:
             d["forma_trial"] = True
@@ -293,7 +316,6 @@ def finalizar(ds, ctx):
             return maxp * (d[key] - lo) / (hi - lo)
 
     for d in ok:
-        # Categoria e Perfil
         pts_cat = d["cat"] * 2
         pts_perfil = CFG["PERFIL_PTS"][d["perfil"]]
         
@@ -341,16 +363,14 @@ def finalizar(ds, ctx):
 # =====================================================================
 
 def calc_prob(V, D, ctx):
-    # Tempo Projetado
-    t_V = V["tadj"]; t_D = D["tadj"]
+    t_V = V["tadj"]
+    t_D = D["tadj"]
     
-    # Ajustes táticos
     if V["trap"] in ctx["post_pick"]: t_V -= 0.05
     if V["trap"] in [1,2,3]: t_V -= 0.04
     if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]): t_V -= 0.03
     if V["perfil"] == "Trombador" and V["trap"] in [1,2,3,4,5] and V["name"] not in ctx["top3_ms"]: t_V += 0.05
     
-    # Desvio Padrão
     sd_V = max(V["sd"], 0.05)
     sd_D = max(D["sd"], 0.05)
     
@@ -434,7 +454,6 @@ def trap_label(d):
 
 def tabela_projecao(ds):
     cols = ["split", "time", "tadj", "msplit", "mtime", "ritmo", "rec"]
-    # Rank manual
     rk = {c: [None]*len(ds) for c in cols}
     for c in cols:
         vals = [(i, d[c]) for i, d in enumerate(ds) if d.get(c) is not None]
