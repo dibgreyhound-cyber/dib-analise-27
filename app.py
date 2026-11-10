@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- AVB atualizado: Nome dos galgos inclusos e coluna Probabilidade mesclada.
+- Padronização de duas casas decimais em todos os valores.
 """
 import re
 import html
@@ -480,7 +480,10 @@ def montar_avbs(rank, ctx):
 
 def get_rank_html(val, rank, max_rank):
     if val is None or rank is None: return "-"
-    txt = f"{val:.3f}" if val < 10 else f"{val:.2f}"
+    
+    # FORÇANDO DUAS CASAS DECIMAIS EM TODOS OS VALORES
+    txt = f"{val:.2f}" 
+    
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
     color = ""
     
@@ -541,7 +544,6 @@ def tbl(headers, rows):
             
         cells = []
         for c in row:
-            # PROTEÇÃO: Se já for uma tag <td (ex: rowspan), não envelopa de novo
             if isinstance(c, str) and c.strip().startswith("<td"):
                 cells.append(c)
             else:
@@ -644,16 +646,19 @@ def tabela_avb(lista, titulo):
         if i > 0:
             rows.append(["<hr>"])
             
-        # ADIÇÃO DOS NOMES NA COLUNA AVB
         avb_v = f"{'⭐ ' if star else ''}{trap_label(V)} - {html.escape(V['name'])}"
         avb_d = f"{trap_label(D)} - {html.escape(D['name'])}"
         
         ov_v, ov_d = fmt_pair(V['overall'], D['overall'], is_time=False, precision=1)
         cat_v, cat_d = fmt_pair(V['cat'], D['cat'], is_time=False, precision=1)
-        sp_v, sp_d = fmt_pair(V['split'], D['split'], is_time=True, precision=3)
+        
+        # ALTERADO PARA PRECISION=2
+        sp_v, sp_d = fmt_pair(V['split'], D['split'], is_time=True, precision=2) 
         t_v, t_d = fmt_pair(V['time'], D['time'], is_time=True, precision=2)
         ta_v, ta_d = fmt_pair(V['tadj'], D['tadj'], is_time=True, precision=2)
-        ms_v, ms_d = fmt_pair(V['msplit'], D['msplit'], is_time=True, precision=3)
+        
+        # ALTERADO PARA PRECISION=2
+        ms_v, ms_d = fmt_pair(V['msplit'], D['msplit'], is_time=True, precision=2) 
         mt_v, mt_d = fmt_pair(V['mtime'], D['mtime'], is_time=True, precision=2)
         r_v, r_d = fmt_pair(V['ritmo'], D['ritmo'], is_time=True, precision=2)
         rec_v, rec_d = fmt_pair(V['rec'], D['rec'], is_time=False, precision=1, is_pct=True)
@@ -661,17 +666,14 @@ def tabela_avb(lista, titulo):
         v_grades = "-".join((r["grade"] or "?") for r in V["runs"])
         d_grades = "-".join((r["grade"] or "?") for r in D["runs"])
         
-        # MESCLAGEM DA COLUNA PROBABILIDADE (rowspan=2)
         prob_cell = f"<td rowspan='2' style='vertical-align:middle;font-weight:bold;font-size:15px;'><span style='color:#00ff00'>{prob:.1f}%</span></td>"
         
-        # Linha 1: Vencedor (inclui a probabilidade mesclada)
         rows.append([
             avb_v, ov_v, cat_v, V['perfil'], v_grades,
             f"{V['peso']:.1f}", f"{V['dias']}", 
             sp_v, t_v, ta_v, ms_v, mt_v, r_v, rec_v, f"{V['conf']:.0f}%", prob_cell
         ])
         
-        # Linha 2: Desafiante (sem a coluna de probabilidade)
         rows.append([
             avb_d, ov_d, cat_d, D['perfil'], d_grades,
             f"{D['peso']:.1f}", f"{D['dias']}", 
