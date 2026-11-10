@@ -2,7 +2,7 @@
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
 - Atualizado com as novas regras de Overall, Fatores, Médias Simples, Travas e Probabilidade Normal (CDF).
-- Corrigido erro de extração JSON do Racing Post (Headers e Tratamento de Exceção).
+- Corrigido KeyError no nome_marcado para galgos sem dados.
 """
 import re
 import html
@@ -162,7 +162,7 @@ def norm_run(f):
     }
 
 # =====================================================================
-# EXTRAÇÃO RACING POST (CORRIGIDO)
+# EXTRAÇÃO RACING POST
 # =====================================================================
 
 def extrair_dados_racingpost(url):
@@ -228,12 +228,11 @@ def analisar_galgo(dog, ctx):
     R = [r for r in runs if oficial(r, ctx)]
     
     d = {"name": dog["name"], "trap": dog["trap"], "runs": runs, "val": R, "nd": not R,
-         "conf": min(100.0, len(R) * 20.0)}
+         "conf": min(100.0, len(R) * 20.0), "bloqueado": False, "alvo": False, "pos": 0, "elegivel": False}
     
     ultima_any = runs[0] if runs else None
     d["dias"] = (ctx["today"] - ultima_any["date"]).days if ultima_any and ultima_any["date"] else 0
     
-    # Trava de Forma: Última é T E tem >= 2 T no histórico
     d["forma_trial"] = False
     if ultima_any and re.match(r"^T", ultima_any["grade"] or ""):
         count_t = sum(1 for r in runs if re.match(r"^T", r["grade"] or ""))
@@ -242,7 +241,6 @@ def analisar_galgo(dog, ctx):
 
     if not R: return d
 
-    # Categoria
     today_n = ctx.get("classe_n")
     last_n = grade_num(R[0]["grade"])
     base = 16.0 - (today_n if today_n else last_n)
@@ -251,18 +249,15 @@ def analisar_galgo(dog, ctx):
         mod = CFG["CAT_BONUS"] if today_n > last_n else (-CFG["CAT_BONUS"] if today_n < last_n else 0.0)
     d["cat_mod"], d["cat"] = mod, base + mod
 
-    # Peso e Dias (Apenas visual)
     last_w = R[0]["weight"]
     atual = dog.get("peso_atual") or last_w
     d["peso"] = atual
 
-    # Tempos e Splits (Média Simples)
     d["split"], d["time"] = R[0]["split"], R[0]["caltm"]
     d["msplit"] = wmean([r["split"] for r in R])
     d["mtime"] = wmean([r["caltm"] for r in R])
     d["ritmo"] = d["mtime"] - d["msplit"] if d["mtime"] and d["msplit"] else None
     
-    # Time Ajustado (Sem going, com tráfego escalonado)
     adj_times = []
     for r in R:
         t_pen = traffic_penalty(r["remarks"])
@@ -270,12 +265,10 @@ def analisar_galgo(dog, ctx):
         adj_times.append(r["caltm"] - (t_pen + dist_scale))
     d["tadj"] = float(np.mean(adj_times)) if adj_times else None
     
-    # Consistência e Pico
     cal = [r["caltm"] for r in R]
     d["sd"] = float(np.std(cal)) if len(cal) > 1 else 0.0
     d["pico"] = min(cal) if cal else None
 
-    # Recuperação (Blindada, 0 se não tiver)
     recs = []
     for r in R:
         b = bends_digits(r["bends"])
@@ -285,11 +278,9 @@ def analisar_galgo(dog, ctx):
     tag = "Ganhou" if d["rec"] > 0.005 else ("Perdeu" if d["rec"] < -0.005 else "Manteve")
     d["rec_txt"] = f"{d['rec']:+.2f}% ({tag})"
 
-    # Perfil
     n_traf = sum(count_traf(r["remarks"]) for r in R)
     d["perfil"] = "Limpo" if n_traf <= 1 else ("Irregular" if n_traf == 2 else "Trombador")
     
-    # Fatores (Acumulados nas últimas 5)
     d["early_cnt"] = sum(1 for r in R if any(re.match(r"^(ep|ald|snld|ld)", t) for t in re.split(r"[,\s]+", str(r["remarks"]).lower())))
     d["saw_cnt"] = sum(1 for r in R if any(t.startswith("saw") or t.startswith("vsaw") for t in re.split(r"[,\s]+", str(r["remarks"]).lower())))
     d["fbt_cnt"] = sum(1 for r in R if first_bend_traffic(r["remarks"]))
@@ -300,53 +291,43 @@ def finalizar(ds, ctx):
     ok = [d for d in ds if not d["nd"]]
     vac = [t for t in range(1, 7) if t not in {d["trap"] for d in ds}]
     
-    # Top 3 Split
     ms_rank = sorted([d for d in ok if d["msplit"]], key=lambda x: x["msplit"])
     top3_ms = {d["name"] for d in ms_rank[:3]}
 
-    # Helper para pontos proporcionais
     def pts_prop(key, maxp, d, invert=True):
         vals = [x[key] for x in ok if x.get(key) is not None]
         if d.get(key) is None or not vals: return 0.0
         lo, hi = min(vals), max(vals)
         if hi == lo: return float(maxp)
-        if invert: # Menor é melhor (Tempo)
+        if invert: 
             return maxp * (hi - d[key]) / (hi - lo)
-        else: # Maior é melhor (Recuperação)
+        else: 
             return maxp * (d[key] - lo) / (hi - lo)
 
     for d in ok:
         pts_cat = d["cat"] * 2
         pts_perfil = CFG["PERFIL_PTS"][d["perfil"]]
         
-        # Velocidade Base (200 pts)
         vel = (pts_prop("tadj", CFG["VEL_PTS"]["tadj"], d) + 
                pts_prop("mtime", CFG["VEL_PTS"]["mtime"], d) + 
                pts_prop("msplit", CFG["VEL_PTS"]["msplit"], d) + 
                pts_prop("ritmo", CFG["VEL_PTS"]["ritmo"], d))
         
-        # Consistência e Pico
         pts_consist = pts_prop("sd", CFG["CONSIST_PTS"], d, invert=True)
         pts_pico = pts_prop("pico", CFG["PICO_PTS"], d, invert=True)
-        
-        # Recuperação
         pts_rec = pts_prop("rec", CFG["RECUP_PTS"], d, invert=False)
         
-        # Fatores
         f = []
         if d["early_cnt"] > 0: f.append(("Early Pace", d["early_cnt"] * CFG["REMARKS_PTS"]["early"]))
         if d["saw_cnt"] > 0: f.append(("Slow Away", d["saw_cnt"] * CFG["REMARKS_PTS"]["slowaway"]))
         if d["fbt_cnt"] > 0: f.append(("First Bend Traffic", d["fbt_cnt"] * CFG["REMARKS_PTS"]["firstbend"]))
         if any(abs(d["trap"] - v) == 1 for v in vac): f.append(("Trap Vazia", CFG["TRAP_VAZIA"]))
         
-        # Tráfego Severo
         if d["perfil"] == "Trombador" and d["trap"] in [1,2,3,4,5] and d["name"] not in top3_ms:
             f.append(("Tráfego Severo", CFG["TRAFEGO_SEVERO"]))
             
         pts_fat = sum(v for _, v in f)
         d["fatores"] = f
-        
-        # Overall Final
         d["overall"] = vel + pts_cat + pts_perfil + pts_consist + pts_pico + pts_rec + pts_fat
 
     ok.sort(key=lambda x: -x["overall"])
@@ -382,7 +363,6 @@ def montar_avbs(rank, ctx):
     elig = [d for d in rank if d["elegivel"]]
     s1, s2, s3 = [], [], []
     
-    # Matchmaking de Elite (para estrela)
     elite_pairs = set()
     for k, slots in enumerate([(3,4), (4,5), (5,6)]):
         if k < len(elig):
@@ -391,7 +371,6 @@ def montar_avbs(rank, ctx):
                 if pos <= len(rank) and rank[pos-1]["elegivel"]:
                     elite_pairs.add((V["name"], rank[pos-1]["name"]))
 
-    # Todos vs Todos
     for V in elig:
         for D in elig:
             if V["name"] == D["name"]: continue
@@ -399,7 +378,6 @@ def montar_avbs(rank, ctx):
             prob = calc_prob(V, D, ctx)
             if prob < 55.0: continue
             
-            # Funil de Excelência
             if V["overall"] <= D["overall"]: continue
             if V["name"] not in ctx["top3_ms"]: continue
             if V["tadj"] > D["tadj"] - 0.03: continue
@@ -407,7 +385,6 @@ def montar_avbs(rank, ctx):
             if V["ritmo"] > D["ritmo"]: continue
             if V["rec"] < D["rec"]: continue
             
-            # Distribuição nas Planilhas
             is_star = (V["name"], D["name"]) in elite_pairs
             
             if D["alvo"] and prob >= 65.0:
@@ -428,10 +405,10 @@ def get_rank_html(val, rank, invert=False):
     txt = f"{val:.3f}" if val < 10 else f"{val:.2f}"
     sup = {1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶"}.get(rank, "")
     color = ""
-    if invert: # Maior é melhor (Recuperação)
+    if invert: 
         if rank == 1: color = "color:green;font-weight:bold"
         elif rank >= 5: color = "color:red"
-    else: # Menor é melhor (Tempos)
+    else: 
         if rank == 1: color = "color:green;font-weight:bold"
         elif rank >= 5: color = "color:red"
     return f"<span style='{color}'>{txt}{sup}</span>"
@@ -443,10 +420,11 @@ def tbl(headers, rows):
         out.append("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>")
     return f"<div style='overflow-x:auto;'><table style='width:100%; border-collapse: collapse; text-align:center; font-size:13px;'><tr>{h}</tr>{''.join(out)}</table></div>"
 
+# CORREÇÃO AQUI: Uso do .get() para evitar KeyError em galgos sem dados (nd=True)
 def nome_marcado(d):
     n = html.escape(d["name"])
-    if d["bloqueado"]: n += " 🚫"
-    if d["alvo"]: n = "🎯 " + n
+    if d.get("bloqueado", False): n += " 🚫"
+    if d.get("alvo", False): n = "🎯 " + n
     return n
 
 def trap_label(d):
@@ -464,7 +442,8 @@ def tabela_projecao(ds):
     rows = []
     for i, d in enumerate(ds):
         if d["nd"]:
-            rows.append([trap_label(d), nome_marcado(d), "-"] * 8)
+            # CORREÇÃO AQUI: 15 traços para alinhar as 17 colunas
+            rows.append([trap_label(d), nome_marcado(d)] + ["-"] * 15)
             continue
             
         fat = "<br>".join(f"{k} ({v:+.1f})" for k, v in d["fatores"]) or "-"
