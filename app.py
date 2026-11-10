@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DIB 2.7 - Analise de corridas de galgos (Streamlit)
-- Ajuste na cor do ranking: verde apenas no 1º e vermelho apenas no último.
+- AVB atualizado: Separação por linhas (Vencedor e Desafiante), cores inteligentes e diferença no menor valor.
 """
 import re
 import html
@@ -475,7 +475,7 @@ def montar_avbs(rank, ctx):
     return sorted(s1, key=lambda x: -x[2]), sorted(s2, key=lambda x: -x[2]), sorted(s3, key=lambda x: -x[2])
 
 # =====================================================================
-# EXIBIÇÃO E VISUAL (CORRIGIDO: VERMELHO APENAS NO ÚLTIMO)
+# EXIBIÇÃO E VISUAL 
 # =====================================================================
 
 def get_rank_html(val, rank, max_rank):
@@ -485,9 +485,9 @@ def get_rank_html(val, rank, max_rank):
     color = ""
     
     if rank == 1:
-        color = "color:#00ff00;font-weight:bold" # Verde apenas no melhor
+        color = "color:#00ff00;font-weight:bold"
     elif rank == max_rank and max_rank > 1:
-        color = "color:#ff4b4b" # Vermelho APENAS no último
+        color = "color:#ff4b4b"
         
     return f"<span style='{color}'>{txt}{sup}</span>"
 
@@ -507,7 +507,7 @@ def tbl(headers, rows):
         table-layout: auto;
     }
     .dib-table th, .dib-table td {
-        padding: 8px 6px;
+        padding: 6px 4px;
         border-bottom: 1px solid rgba(128, 128, 128, 0.2);
         white-space: nowrap;
         line-height: 1.2;
@@ -519,7 +519,12 @@ def tbl(headers, rows):
     .dib-table td.sep {
         padding: 0;
         height: 2px;
-        background-color: rgba(128, 128, 128, 0.3);
+        background-color: rgba(128, 128, 128, 0.4);
+    }
+    .dib-table td.sep-avb {
+        padding: 0;
+        height: 1px;
+        background-color: rgba(128, 128, 128, 0.15);
     }
     </style>
     """
@@ -529,6 +534,9 @@ def tbl(headers, rows):
     for row in rows:
         if len(row) == 1 and "<hr" in str(row[0]):
             out.append(f"<tr><td class='sep' colspan='{len(headers)}'></td></tr>")
+            continue
+        if len(row) == 1 and "sep-avb" in str(row[0]):
+            out.append(f"<tr><td class='sep-avb' colspan='{len(headers)}'></td></tr>")
             continue
             
         cells = []
@@ -554,7 +562,7 @@ def tabela_projecao(ds):
     
     for c in cols:
         vals = [(i, d[c]) for i, d in enumerate(ds) if d.get(c) is not None]
-        max_rk[c] = len(vals) # Guarda o tamanho máximo (último lugar)
+        max_rk[c] = len(vals)
         vals.sort(key=lambda x: x[1], reverse=(c == "rec"))
         for rank, (i, _) in enumerate(vals, 1):
             rk[c][i] = rank
@@ -588,37 +596,82 @@ def tabela_projecao(ds):
     heads = ["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup. Média", "Conf."]
     return tbl(heads, rows)
 
+
 def tabela_avb(lista, titulo):
     st.markdown(f"#### {titulo}")
     if not lista:
         st.info("Nenhum AVB nesta categoria.")
         return
+
+    def fmt_pair(val_v, val_d, is_time=False, precision=2, is_pct=False):
+        if val_v is None or val_d is None: return "-", "-"
+        p = f".{precision}f"
+        suffix = "%" if is_pct else ""
+        
+        v_str = f"{val_v:{p}}{suffix}"
+        d_str = f"{val_d:{p}}{suffix}"
+        
+        diff = abs(val_v - val_d)
+        diff_str = f" (+{diff:{p}}{suffix})" if not is_pct else f" (+{diff:{p}}%)"
+        
+        # Regra: A diferença vai na frente do número menor
+        if val_v <= val_d:
+            v_str += diff_str
+        else:
+            d_str += diff_str
+
+        # Cores
+        if is_time: # Menor é melhor
+            if val_v < val_d:
+                v_str = f"<span style='color:#00ff00;font-weight:bold'>{v_str}</span>"
+                d_str = f"<span style='color:#ff4b4b'>{d_str}</span>"
+            elif val_v > val_d:
+                v_str = f"<span style='color:#ff4b4b'>{v_str}</span>"
+                d_str = f"<span style='color:#00ff00;font-weight:bold'>{d_str}</span>"
+        else: # Maior é melhor (Overall, Recup)
+            if val_v > val_d:
+                v_str = f"<span style='color:#00ff00;font-weight:bold'>{v_str}</span>"
+                d_str = f"<span style='color:#ff4b4b'>{d_str}</span>"
+            elif val_v < val_d:
+                v_str = f"<span style='color:#ff4b4b'>{v_str}</span>"
+                d_str = f"<span style='color:#00ff00;font-weight:bold'>{d_str}</span>"
+        return v_str, d_str
+
     rows = []
     for i, (V, D, prob, star) in enumerate(lista):
         if i > 0:
             rows.append(["<hr>"])
             
-        avb_cell = f"{'⭐ ' if star else ''}{trap_label(V)}<br>{trap_label(D)}"
-        pv = lambda x: f"{x:.3f}" if x < 10 else f"{x:.2f}"
+        avb_v = f"{'⭐ ' if star else ''}{trap_label(V)}"
+        avb_d = f"{trap_label(D)}"
         
+        ov_v, ov_d = fmt_pair(V['overall'], D['overall'], is_time=False, precision=1)
+        cat_v, cat_d = fmt_pair(V['cat'], D['cat'], is_time=False, precision=1)
+        sp_v, sp_d = fmt_pair(V['split'], D['split'], is_time=True, precision=3)
+        t_v, t_d = fmt_pair(V['time'], D['time'], is_time=True, precision=2)
+        ta_v, ta_d = fmt_pair(V['tadj'], D['tadj'], is_time=True, precision=2)
+        ms_v, ms_d = fmt_pair(V['msplit'], D['msplit'], is_time=True, precision=3)
+        mt_v, mt_d = fmt_pair(V['mtime'], D['mtime'], is_time=True, precision=2)
+        r_v, r_d = fmt_pair(V['ritmo'], D['ritmo'], is_time=True, precision=2)
+        rec_v, rec_d = fmt_pair(V['rec'], D['rec'], is_time=False, precision=1, is_pct=True)
+
+        v_grades = "-".join((r["grade"] or "?") for r in V["runs"])
+        d_grades = "-".join((r["grade"] or "?") for r in D["runs"])
+        
+        # Linha 1: Vencedor
         rows.append([
-            avb_cell,
-            f"{V['overall']:.1f}<br>{D['overall']:.1f} ({V['overall']-D['overall']:+.1f})",
-            f"{V['cat']:.1f}<br>{D['cat']:.1f}",
-            f"{V['perfil']}<br>{D['perfil']}",
-            "-".join((r["grade"] or "?") for r in V["runs"]) + "<br>" + "-".join((r["grade"] or "?") for r in D["runs"]),
-            f"{V['peso']:.1f}<br>{D['peso']:.1f}",
-            f"{V['dias']}<br>{D['dias']}",
-            f"{pv(V['split'])}<br>{pv(D['split'])}",
-            f"{pv(V['time'])}<br>{pv(D['time'])}",
-            f"{pv(V['tadj'])}<br>{pv(D['tadj'])}",
-            f"{pv(V['msplit'])}<br>{pv(D['msplit'])}",
-            f"{pv(V['mtime'])}<br>{pv(D['mtime'])}",
-            f"{pv(V['ritmo'])}<br>{pv(D['ritmo'])}",
-            f"{V['rec']:+.1f}%<br>{D['rec']:+.1f}%",
-            f"{V['conf']:.0f}%<br>{D['conf']:.0f}%",
-            f"<b>{prob:.1f}%</b><br>{100-prob:.1f}% ({prob - (100-prob):+.1f}%)"
+            avb_v, ov_v, cat_v, V['perfil'], v_grades,
+            f"{V['peso']:.1f}", f"{V['dias']}", 
+            sp_v, t_v, ta_v, ms_v, mt_v, r_v, rec_v, f"{V['conf']:.0f}%", f"<b>{prob:.1f}%</b>"
         ])
+        
+        # Linha 2: Desafiante
+        rows.append([
+            avb_d, ov_d, cat_d, D['perfil'], d_grades,
+            f"{D['peso']:.1f}", f"{D['dias']}", 
+            sp_d, t_d, ta_d, ms_d, mt_d, r_d, rec_d, f"{D['conf']:.0f}%", f"{100-prob:.1f}%"
+        ])
+        
     heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
