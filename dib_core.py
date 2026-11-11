@@ -40,9 +40,8 @@ CFG = {
     "REMARKS_PTS": {"early": 1.0, "slowaway": -1.0, "firstbend": -1.0},
     "TRAP_VAZIA": 1.0, "TRAFEGO_SEVERO": -2.0, "CONF_MIN_VENCEDOR": 60.0,
     
-    # NOVOS PESOS DE VELOCIDADE (DOMINAM O OVERALL)
     "VEL_PTS": {"tadj": 100, "mtime": 80, "msplit": 80, "ritmo": 60},
-    "CONSIST_PTS": 30, "PICO_PTS": 20, "RECUP_PTS": 10, # Recup reduzida pela metade
+    "CONSIST_PTS": 30, "PICO_PTS": 20, "RECUP_PTS": 10, 
 }
 
 FIELD_MAP = {
@@ -372,7 +371,6 @@ def finalizar(ds, ctx):
         return maxp * (hi - d[key]) / (hi - lo) if invert else maxp * (d[key] - lo) / (hi - lo)
 
     for d in ok:
-        # NOVA FÓRMULA DO OVERALL (VELOCIDADE DOMINANTE)
         pts_cat = d["cat"] * 1.5
         pts_perfil = CFG["PERFIL_PTS"][d["perfil"]]
         
@@ -405,7 +403,7 @@ def finalizar(ds, ctx):
     return ok, top3_ms
 
 # =====================================================================
-# NOVO CÁLCULO DE AVB (DIB 3.4 - DUELO DIRETO + CONFLITO DE PACE)
+# NOVO CÁLCULO DE AVB (DIB 3.4 - FOCADO NO >= 60%)
 # =====================================================================
 def calc_prob(V, D, rank, ctx):
     prob = 50.0
@@ -470,11 +468,10 @@ def calc_prob(V, D, rank, ctx):
     return max(25.0, min(75.0, prob))
 
 def montar_avbs(rank, ctx):
-    # DIB 3.4: Pega o Top 4 puro (incluindo os bloqueados), para cobrir a casa
     top4 = [d for d in rank if d.get("name") != "vacant"][:4]
     if len(top4) < 2: return [], [], []
     
-    s1, s2 = [], []
+    s1 = []
     
     for i in range(len(top4)):
         for j in range(i+1, len(top4)):
@@ -488,10 +485,8 @@ def montar_avbs(rank, ctx):
                 
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
-            else:
-                s2.append((V, D, prob, True))
                 
-    return sorted(s1, key=lambda x: -x[2]), sorted(s2, key=lambda x: -x[2]), []
+    return sorted(s1, key=lambda x: -x[2]), [], []
 
 def get_rank_html(val, rank, max_rank):
     if val is None or rank is None: return "-"
@@ -552,7 +547,7 @@ def tabela_projecao(ds):
 
 def tabela_avb(lista, titulo):
     st.markdown(f"#### {titulo}")
-    if not lista: st.info("Nenhum AVB nesta categoria."); return
+    if not lista: st.info("Nenhum confronto com vantagem superior a 60% nesta corrida."); return
 
     def fmt_pair(val_v, val_d, is_time=False, precision=2, is_pct=False):
         if val_v is None or val_d is None: return "-", "-"
@@ -601,6 +596,41 @@ def tabela_avb(lista, titulo):
     heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
+# =====================================================================
+# NOVA FUNÇÃO DE OBSERVAÇÕES INDISPENSÁVEIS
+# =====================================================================
+def gerar_observacoes(rank, avbs, ctx):
+    if not rank: return
+    st.markdown("---")
+    st.markdown("#### 📝 Observações Indispensáveis")
+    
+    top1 = rank[0]
+    perfil_top1 = top1['perfil']
+    st.markdown(f"- **Favorito:** 🥇 {TRAP_EMOJI[top1['trap']]} {top1['name']} (Overall: {top1['overall']:.1f}) | Perfil: {perfil_top1}.")
+    
+    alvos = [d for d in rank if d.get("alvo")]
+    if alvos:
+        nomes = ", ".join([f"{TRAP_EMOJI[d['trap']]} {d['name']}" for d in alvos])
+        st.markdown(f"- **Alvos (🎯):** {nomes}. (Risco alto de tráfego ou recuperação negativa).")
+        
+    bloqueados = [d for d in rank if d.get("bloqueado")]
+    if bloqueados:
+        nomes = ", ".join([f"{TRAP_EMOJI[d['trap']]} {d['name']}" for d in bloqueados])
+        st.markdown(f"- **Bloqueados (🚫):** {nomes}. (Risco para aposta de Vitória).")
+        
+    if avbs:
+        best_avb = avbs[0]
+        V, D, prob, star = best_avb
+        star_txt = " ⭐" if star else ""
+        st.markdown(f"- **Melhor Aposta (AVB):** {TRAP_EMOJI[V['trap']]} {V['name']} vence {TRAP_EMOJI[D['trap']]} {D['name']} com **{prob:.1f}%** de probabilidade{star_txt}.")
+    else:
+        st.markdown("- **Melhor Aposta (AVB):** Nenhum confronto atingiu 60% de vantagem matemática.")
+
+    top3_ms = ctx.get("top3_ms", set())
+    if len(top3_ms) >= 3:
+        st.markdown("- **Atenção:** Múltiplos cães com largada rápida (Top 3 Split). Isso aumenta o risco de conflito de pace (trombadas na 1ª curva).")
+
+
 def main():
     st.set_page_config(page_title="DIB GREYHOUND 3.4", layout="wide")
     st.title("🐾 DIB GREYHOUND 3.4")
@@ -632,8 +662,11 @@ def main():
             st.markdown("**Classificação:** " + " > ".join(f"{MEDALS.get(d['pos'], str(d['pos'])+'º')} {TRAP_EMOJI[d['trap']]} {d['trap']}" for d in rank))
             
             s1, s2, s3 = montar_avbs(rank, ctx)
+            # Exibe apenas a planilha principal (>= 60%)
             tabela_avb(s1, "1ª Planilha — AVB Principal (Prob ≥ 60%)")
-            tabela_avb(s2, "2ª Planilha — AVB Secundário (Prob < 60%)")
+            
+            # Adiciona as Observações
+            gerar_observacoes(rank, s1, ctx)
 
 if __name__ == "__main__":
     main()
