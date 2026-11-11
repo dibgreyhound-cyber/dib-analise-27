@@ -454,36 +454,27 @@ def calc_prob(V, D, rank, ctx):
 
     return max(25.0, min(75.0, prob))
 
-# =====================================================================
-# NOVA FUNÇÃO DE AVB (TODOS OS GALGOS, IGNORANDO VENCEDORES BLOQUEADOS)
-# =====================================================================
 def montar_avbs(rank, ctx):
-    # Pega todos os cães elegíveis (com dados), em vez de apenas o Top 4
     elig = [d for d in rank if d.get("name") != "vacant" and not d.get("nd")]
     if len(elig) < 2: return []
-
+    
     s1 = []
-
-    # Itera sobre todas as combinações possíveis
     for i in range(len(elig)):
         for j in range(i+1, len(elig)):
             A, B = elig[i], elig[j]
             prob_A = calc_prob(A, B, rank, ctx)
-
+            
             if prob_A >= 50.0:
                 V, D, prob = A, B, prob_A
             else:
                 V, D, prob = B, A, 100.0 - prob_A
-
-            # TRAVA DE AVB: Se o Vencedor estiver bloqueado, ignoramos o confronto
+                
             if V.get("bloqueado", False):
                 continue
-
-            # Só adiciona se a probabilidade for alta o suficiente
+                
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
-
-    # Ordena pela maior probabilidade
+                
     return sorted(s1, key=lambda x: -x[2])
 
 def get_rank_html(val, rank, max_rank):
@@ -594,33 +585,39 @@ def tabela_avb(lista, titulo):
     heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
+# =====================================================================
+# NOVA FUNÇÃO DE OBSERVAÇÕES (INSIGHTS INTELIGENTES)
+# =====================================================================
 def gerar_observacoes(rank, avbs, ctx):
     if not rank: return
     st.markdown("---")
     st.markdown("#### 📝 Observações Indispensáveis")
     
-    top1 = rank[0]
-    perfil_top1 = top1['perfil']
-    st.markdown(f"- **Favorito:** 🥇 {TRAP_EMOJI[top1['trap']]} {top1['name']} (Overall: {top1['overall']:.1f}) | Perfil: {perfil_top1}.")
-    
-    alvos = [d for d in rank if d.get("alvo")]
-    if alvos:
-        nomes = ", ".join([f"{TRAP_EMOJI[d['trap']]} {d['name']}" for d in alvos])
-        st.markdown(f"- **Alvos (🎯):** {nomes}. (Risco alto de tráfego ou recuperação negativa).")
-        
-    bloqueados = [d for d in rank if d.get("bloqueado")]
-    if bloqueados:
-        nomes = ", ".join([f"{TRAP_EMOJI[d['trap']]} {d['name']}" for d in bloqueados])
-        st.markdown(f"- **Bloqueados (🚫):** {nomes}. (Risco para aposta de Vitória).")
-        
-    if avbs:
-        best_avb = avbs[0]
-        V, D, prob, star = best_avb
-        star_txt = " ⭐" if star else ""
-        st.markdown(f"- **Melhor Aposta (AVB):** {TRAP_EMOJI[V['trap']]} {V['name']} vence {TRAP_EMOJI[D['trap']]} {D['name']} com **{prob:.1f}%** de probabilidade{star_txt}.")
-    else:
-        st.markdown("- **Melhor Aposta (AVB):** Nenhum confronto atingiu 60% de vantagem matemática.")
+    # 1. Melhor Elegível
+    elegiveis = [d for d in rank if not d.get("bloqueado")]
+    if elegiveis:
+        best_elig = elegiveis[0]
+        if best_elig["pos"] > 1:
+            st.markdown(f"- **🏆 Melhor Elegível:** O favorito absoluto está bloqueado. O cão mais seguro para vitória é o **{TRAP_EMOJI[best_elig['trap']]} {best_elig['name']}** (Posição {best_elig['pos']} | Perfil: {best_elig['perfil']}).")
 
+    # 2. O "Closer" (Fechador) vs Speed Burner (Largador)
+    top_ritmo = min([d for d in rank if d.get("ritmo") is not None], key=lambda x: x["ritmo"], default=None)
+    top_split = min([d for d in rank if d.get("msplit") is not None], key=lambda x: x["msplit"], default=None)
+    if top_ritmo and top_split and top_ritmo["name"] != top_split["name"]:
+        st.markdown(f"- **💡 Análise de Pace:** O **{top_split['name']}** tem a melhor largada (Split), mas o **{top_ritmo['name']}** tem o melhor ritmo final. O segundo se beneficia se o primeiro for atrapalhado na frente.")
+
+    # 3. Alerta de Recuperação (O cão que perde posições)
+    pior_rec = min([d for d in rank if d.get("rec") is not None], key=lambda x: x["rec"], default=None)
+    if pior_rec and pior_rec["rec"] < -10.0:
+        st.markdown(f"- **⚠️ Alerta de Tráfego:** O cão **{pior_rec['name']}** tem uma recuperação média terrível ({pior_rec['rec']:+.1f}%). Se ele não largar na frente, vai perder posições na reta.")
+
+    # 4. Queda de Classe
+    dropping_class = [d for d in rank if d.get("cat_mod", 0) > 0]
+    if dropping_class:
+        nomes = ", ".join([f"{d['name']}" for d in dropping_class])
+        st.markdown(f"- **📉 Queda de Classe:** O(s) cão(es) {nomes} desceu(ram) de categoria e corre(m) contra rivais mais fracos hoje. Isso é um bônus tático importante.")
+
+    # 5. Alerta de Pace Genérico (se aplicável)
     top3_ms = ctx.get("top3_ms", set())
     if len(top3_ms) >= 3:
         st.markdown("- **Atenção:** Múltiplos cães com largada rápida (Top 3 Split). Isso aumenta o risco de conflito de pace (trombadas na 1ª curva).")
