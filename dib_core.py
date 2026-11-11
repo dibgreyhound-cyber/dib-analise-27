@@ -523,6 +523,7 @@ def tabela_projecao(ds):
         perfil_e = {"Limpo": "✅", "Irregular": "⚠️", "Trombador": "🔴"}[d["perfil"]]
         dias_txt = f"{d['dias']} ⚠️" if d['dias'] > 21 else str(d['dias'])
         
+        # ORDEM CORRIGIDA AQUI: Split -> Time -> Méd. Split -> Méd. Time -> Time Ajust. -> Ritmo
         rows.append([
             trap_label(d), nome_marcado(d), f"{MEDALS.get(d['pos'], str(d['pos'])+'º')} {d['overall']:.1f}",
             f"{d['cat']:.1f} ({d['cat_mod']:+.0f})", fat, f"{perfil_e} {d['perfil']}",
@@ -569,6 +570,7 @@ def tabela_avb(lista, titulo):
 
         prob_cell = f"<td rowspan='2' style='vertical-align:middle;font-weight:bold;font-size:16px;'><span style='color:#00ff00'>{prob:.1f}%</span></td>"
         
+        # ORDEM CORRIGIDA AQUI TAMBÉM
         rows.append([
             f"{'⭐ ' if star else ''}{trap_label(V)} - {html.escape(V['name'])}", 
             ov_v, cat_v, V['perfil'], "-".join((r["grade"] or "?") for r in V["runs"]),
