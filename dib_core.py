@@ -476,6 +476,7 @@ def montar_avbs(rank, ctx):
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
                 
+    # Retorna apenas UMA lista agora
     return sorted(s1, key=lambda x: -x[2])
 
 def get_rank_html(val, rank, max_rank):
@@ -648,7 +649,7 @@ def main():
             
             st.markdown("**Classificação:** " + " > ".join(f"{MEDALS.get(d['pos'], str(d['pos'])+'º')} {TRAP_EMOJI[d['trap']]} {d['trap']}" for d in rank))
             
-            # Retorna apenas a lista principal (>=60%)
+            # CORREÇÃO AQUI: A função agora retorna apenas UMA lista
             s1 = montar_avbs(rank, ctx)
             
             tabela_avb(s1, "1ª Planilha — AVB Principal (Prob ≥ 60%)")
