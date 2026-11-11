@@ -528,11 +528,11 @@ def tabela_projecao(ds):
             f"{d['cat']:.1f} ({d['cat_mod']:+.0f})", fat, f"{perfil_e} {d['perfil']}",
             "-".join((r["grade"] or "?") for r in d["runs"]), f"{d['peso']:.1f}", dias_txt,
             get_rank_html(d["split"], rk["split"][i], max_rk["split"]), get_rank_html(d["time"], rk["time"][i], max_rk["time"]),
-            get_rank_html(d["tadj"], rk["tadj"][i], max_rk["tadj"]), get_rank_html(d["msplit"], rk["msplit"][i], max_rk["msplit"]),
-            get_rank_html(d["mtime"], rk["mtime"][i], max_rk["mtime"]), get_rank_html(d["ritmo"], rk["ritmo"][i], max_rk["ritmo"]),
+            get_rank_html(d["msplit"], rk["msplit"][i], max_rk["msplit"]), get_rank_html(d["mtime"], rk["mtime"][i], max_rk["mtime"]),
+            get_rank_html(d["tadj"], rk["tadj"][i], max_rk["tadj"]), get_rank_html(d["ritmo"], rk["ritmo"][i], max_rk["ritmo"]),
             get_rank_html(d["rec"], rk["rec"][i], max_rk["rec"]) + f"<br><small>{d['rec_txt'].split()[1]}</small>", f"{d['conf']:.0f}%"
         ])
-    return tbl(["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup. Média", "Conf."], rows)
+    return tbl(["Trap", "Galgo", "Overall", "Cat", "Fatores", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Méd. Split", "Méd. Time", "Time Ajust.", "Ritmo", "Recup. Média", "Conf."], rows)
 
 def tabela_avb(lista, titulo):
     st.markdown(f"#### {titulo}")
@@ -561,9 +561,9 @@ def tabela_avb(lista, titulo):
         cat_v, cat_d = fmt_pair(V['cat'], D['cat'], False, 1)
         sp_v, sp_d = fmt_pair(V['split'], D['split'], True, 2)
         t_v, t_d = fmt_pair(V['time'], D['time'], True, 2)
-        ta_v, ta_d = fmt_pair(V['tadj'], D['tadj'], True, 2)
         ms_v, ms_d = fmt_pair(V['msplit'], D['msplit'], True, 2)
         mt_v, mt_d = fmt_pair(V['mtime'], D['mtime'], True, 2)
+        ta_v, ta_d = fmt_pair(V['tadj'], D['tadj'], True, 2)
         r_v, r_d = fmt_pair(V['ritmo'], D['ritmo'], True, 2)
         rec_v, rec_d = fmt_pair(V['rec'], D['rec'], False, 1, True)
 
@@ -572,52 +572,44 @@ def tabela_avb(lista, titulo):
         rows.append([
             f"{'⭐ ' if star else ''}{trap_label(V)} - {html.escape(V['name'])}", 
             ov_v, cat_v, V['perfil'], "-".join((r["grade"] or "?") for r in V["runs"]),
-            f"{V['peso']:.1f}", f"{V['dias']}", sp_v, t_v, ta_v, ms_v, mt_v, r_v, rec_v, f"{V['conf']:.0f}%", 
+            f"{V['peso']:.1f}", f"{V['dias']}", sp_v, t_v, ms_v, mt_v, ta_v, r_v, rec_v, f"{V['conf']:.0f}%", 
             prob_cell
         ])
         
         rows.append([
             f"{trap_label(D)} - {html.escape(D['name'])}", 
             ov_d, cat_d, D['perfil'], "-".join((r["grade"] or "?") for r in D["runs"]),
-            f"{D['peso']:.1f}", f"{D['dias']}", sp_d, t_d, ta_d, ms_d, mt_d, r_d, rec_d, f"{D['conf']:.0f}%"
+            f"{D['peso']:.1f}", f"{D['dias']}", sp_d, t_d, ms_d, mt_d, ta_d, r_d, rec_d, f"{D['conf']:.0f}%"
         ])
         
-    heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
+    heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Méd. Split", "Méd. Time", "Time Ajust.", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
-# =====================================================================
-# NOVA FUNÇÃO DE OBSERVAÇÕES (INSIGHTS INTELIGENTES)
-# =====================================================================
 def gerar_observacoes(rank, avbs, ctx):
     if not rank: return
     st.markdown("---")
     st.markdown("#### 📝 Observações Indispensáveis")
     
-    # 1. Melhor Elegível
     elegiveis = [d for d in rank if not d.get("bloqueado")]
     if elegiveis:
         best_elig = elegiveis[0]
         if best_elig["pos"] > 1:
             st.markdown(f"- **🏆 Melhor Elegível:** O favorito absoluto está bloqueado. O cão mais seguro para vitória é o **{TRAP_EMOJI[best_elig['trap']]} {best_elig['name']}** (Posição {best_elig['pos']} | Perfil: {best_elig['perfil']}).")
 
-    # 2. O "Closer" (Fechador) vs Speed Burner (Largador)
     top_ritmo = min([d for d in rank if d.get("ritmo") is not None], key=lambda x: x["ritmo"], default=None)
     top_split = min([d for d in rank if d.get("msplit") is not None], key=lambda x: x["msplit"], default=None)
     if top_ritmo and top_split and top_ritmo["name"] != top_split["name"]:
         st.markdown(f"- **💡 Análise de Pace:** O **{top_split['name']}** tem a melhor largada (Split), mas o **{top_ritmo['name']}** tem o melhor ritmo final. O segundo se beneficia se o primeiro for atrapalhado na frente.")
 
-    # 3. Alerta de Recuperação (O cão que perde posições)
     pior_rec = min([d for d in rank if d.get("rec") is not None], key=lambda x: x["rec"], default=None)
     if pior_rec and pior_rec["rec"] < -10.0:
         st.markdown(f"- **⚠️ Alerta de Tráfego:** O cão **{pior_rec['name']}** tem uma recuperação média terrível ({pior_rec['rec']:+.1f}%). Se ele não largar na frente, vai perder posições na reta.")
 
-    # 4. Queda de Classe
     dropping_class = [d for d in rank if d.get("cat_mod", 0) > 0]
     if dropping_class:
         nomes = ", ".join([f"{d['name']}" for d in dropping_class])
         st.markdown(f"- **📉 Queda de Classe:** O(s) cão(es) {nomes} desceu(ram) de categoria e corre(m) contra rivais mais fracos hoje. Isso é um bônus tático importante.")
 
-    # 5. Alerta de Pace Genérico (se aplicável)
     top3_ms = ctx.get("top3_ms", set())
     if len(top3_ms) >= 3:
         st.markdown("- **Atenção:** Múltiplos cães com largada rápida (Top 3 Split). Isso aumenta o risco de conflito de pace (trombadas na 1ª curva).")
