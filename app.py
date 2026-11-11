@@ -11,7 +11,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="DIB GREYHOUND 3.3", layout="wide", initial_sidebar_state="auto")
+st.set_page_config(page_title="DIB GREYHOUND 3.4", layout="wide", initial_sidebar_state="auto")
 import dib_core as dib   # seu codigo de calculo e tabelas (sem mudancas)
 
 BASE = "https://greyhoundbet.racingpost.com"
@@ -162,13 +162,18 @@ def analisar(race_id, r_date, c, classe_in, dist_in, pp_in):
     st.markdown(dib.tabela_projecao(ds), unsafe_allow_html=True)
     st.markdown("**Classificação:** " + " > ".join(
         f"{dib.MEDALS.get(d['pos'], str(d['pos']) + 'º')} {dib.TRAP_EMOJI[d['trap']]} {d['trap']}" for d in rank))
-    s1, s2, s3 = dib.montar_avbs(rank, ctx)
+    
+    # CORREÇÃO: Agora recebe apenas 1 lista (a planilha principal)
+    s1 = dib.montar_avbs(rank, ctx)
+    
     dib.tabela_avb(s1, "1ª Planilha — AVB Principal (Prob ≥ 60%)")
-    dib.tabela_avb(s2, "2ª Planilha — AVB Secundário (Prob < 60%)")
+    
+    # ADIÇÃO: Chama a função de observações
+    dib.gerar_observacoes(rank, s1, ctx)
 
 
 def main():
-    st.title("🐾 DIB GREYHOUND 3.3")
+    st.title("🐾 DIB GREYHOUND 3.4")
     sel = st.session_state.get("sel")
 
     with st.sidebar:
