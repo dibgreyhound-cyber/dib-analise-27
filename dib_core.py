@@ -402,9 +402,6 @@ def finalizar(ds, ctx):
         d["elegivel"] = not d["bloqueado"]
     return ok, top3_ms
 
-# =====================================================================
-# NOVO CÁLCULO DE AVB (DIB 3.4 - FOCADO NO >= 60%)
-# =====================================================================
 def calc_prob(V, D, rank, ctx):
     prob = 50.0
     if V.get("tadj") is None or D.get("tadj") is None: return 50.0
@@ -473,10 +470,13 @@ def montar_avbs(rank, ctx):
             else:
                 V, D, prob = B, A, 100.0 - prob_A
                 
+            # TRAVA DE AVB: Se o Vencedor estiver bloqueado, ignoramos o confronto
+            if V.get("bloqueado", False):
+                continue
+                
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
                 
-    # Retorna apenas UMA lista agora
     return sorted(s1, key=lambda x: -x[2])
 
 def get_rank_html(val, rank, max_rank):
@@ -538,7 +538,7 @@ def tabela_projecao(ds):
 
 def tabela_avb(lista, titulo):
     st.markdown(f"#### {titulo}")
-    if not lista: st.info("Nenhum confronto com vantagem superior a 60% nesta corrida."); return
+    if not lista: st.info("Nenhum AVB nesta categoria."); return
 
     def fmt_pair(val_v, val_d, is_time=False, precision=2, is_pct=False):
         if val_v is None or val_d is None: return "-", "-"
@@ -617,44 +617,3 @@ def gerar_observacoes(rank, avbs, ctx):
     top3_ms = ctx.get("top3_ms", set())
     if len(top3_ms) >= 3:
         st.markdown("- **Atenção:** Múltiplos cães com largada rápida (Top 3 Split). Isso aumenta o risco de conflito de pace (trombadas na 1ª curva).")
-
-
-def main():
-    st.set_page_config(page_title="DIB GREYHOUND 3.4", layout="wide")
-    st.title("🐾 DIB GREYHOUND 3.4")
-
-    url_alvo = st.text_input("Link", placeholder="Cole o link da corrida aqui...", label_visibility="collapsed")
-
-    with st.sidebar:
-        st.header("Ajustes da Corrida")
-        classe = st.text_input("Classe (ex: A4)", value="A4")
-        dist_in = st.number_input("Distância (m) - 0 = Auto", value=0, step=10)
-        pp_in = st.text_input("Post Pick (ex: 1-2-3)", value="")
-
-    if st.button("Analisar Corrida", type="primary") and url_alvo:
-        dogs, meta, meta_info = extrair_dados_racingpost(url_alvo)
-        if dogs:
-            dist = float(dist_in) if dist_in > 0 else (float(pd.Series([r["dist"] for d in dogs for r in d["runs"] if r["dist"]]).mode().iloc[0]) if any(r["dist"] for d in dogs for r in d["runs"]) else 480.0)
-            ctx = {"dist": dist, "today": parse_date(meta["r_date"]), "classe_n": grade_num(classe),
-                   "post_pick": [int(x) for x in re.findall(r"\d", pp_in)],
-                   "vazias": [t for t in range(1, 7) if t not in {d["trap"] for d in dogs if d["name"] != "vacant"}]}
-            
-            ds = [analisar_galgo(d, ctx) for d in dogs]
-            rank, top3_ms = finalizar(ds, ctx)
-            ds.sort(key=lambda d: d["trap"])
-            
-            st.markdown(f"### {classe} · {int(dist)}m · POST PICK: {pp_in or '-'}")
-            st.markdown("#### Planilha de Projeção")
-            st.markdown(tabela_projecao(ds), unsafe_allow_html=True)
-            
-            st.markdown("**Classificação:** " + " > ".join(f"{MEDALS.get(d['pos'], str(d['pos'])+'º')} {TRAP_EMOJI[d['trap']]} {d['trap']}" for d in rank))
-            
-            # CORREÇÃO AQUI: A função agora retorna apenas UMA lista
-            s1 = montar_avbs(rank, ctx)
-            
-            tabela_avb(s1, "1ª Planilha — AVB Principal (Prob ≥ 60%)")
-            
-            gerar_observacoes(rank, s1, ctx)
-
-if __name__ == "__main__":
-    main()
