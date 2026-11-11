@@ -31,7 +31,7 @@ DICIONARIO_REMARKS = {
 }
 
 # =====================================================================
-# CONFIGURAÇÃO GLOBAL (DIB 3.4 - OVERALL ALINHADO E TOP 4 PURO)
+# CONFIGURAÇÃO GLOBAL (DIB 3.4)
 # =====================================================================
 CFG = {
     "N_RUNS": 5, "N_CORREDORES": 6, "CAT_BONUS": 2.0,
@@ -454,29 +454,36 @@ def calc_prob(V, D, rank, ctx):
 
     return max(25.0, min(75.0, prob))
 
+# =====================================================================
+# NOVA FUNÇÃO DE AVB (TODOS OS GALGOS, IGNORANDO VENCEDORES BLOQUEADOS)
+# =====================================================================
 def montar_avbs(rank, ctx):
-    top4 = [d for d in rank if d.get("name") != "vacant"][:4]
-    if len(top4) < 2: return []
-    
+    # Pega todos os cães elegíveis (com dados), em vez de apenas o Top 4
+    elig = [d for d in rank if d.get("name") != "vacant" and not d.get("nd")]
+    if len(elig) < 2: return []
+
     s1 = []
-    
-    for i in range(len(top4)):
-        for j in range(i+1, len(top4)):
-            A, B = top4[i], top4[j]
+
+    # Itera sobre todas as combinações possíveis
+    for i in range(len(elig)):
+        for j in range(i+1, len(elig)):
+            A, B = elig[i], elig[j]
             prob_A = calc_prob(A, B, rank, ctx)
-            
+
             if prob_A >= 50.0:
                 V, D, prob = A, B, prob_A
             else:
                 V, D, prob = B, A, 100.0 - prob_A
-                
+
             # TRAVA DE AVB: Se o Vencedor estiver bloqueado, ignoramos o confronto
             if V.get("bloqueado", False):
                 continue
-                
+
+            # Só adiciona se a probabilidade for alta o suficiente
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
-                
+
+    # Ordena pela maior probabilidade
     return sorted(s1, key=lambda x: -x[2])
 
 def get_rank_html(val, rank, max_rank):
@@ -538,7 +545,7 @@ def tabela_projecao(ds):
 
 def tabela_avb(lista, titulo):
     st.markdown(f"#### {titulo}")
-    if not lista: st.info("Nenhum AVB nesta categoria."); return
+    if not lista: st.info("Nenhum confronto com vantagem superior a 60% nesta corrida."); return
 
     def fmt_pair(val_v, val_d, is_time=False, precision=2, is_pct=False):
         if val_v is None or val_d is None: return "-", "-"
