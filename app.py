@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-app.py - Lista de corridas / Resultados na barra lateral + analise na pagina principal.
+app.py - Lista de corridas / Resultados na barra lateral + analise e Form na pagina principal.
 Usa o seu dib_core.py (calculo e tabelas) sem mudancas.
 """
 import re
@@ -21,22 +21,18 @@ LISTA_CANDIDATOS = [
     BASE + "/meeting-list/blocks.sd?r_date={d}&blocks=list",
     BASE + "/meeting/list.sd?r_date={d}",
 ]
-LISTA_RES_CANDIDATOS = [
-    BASE + "/results/blocks.sd?r_date={d}&blocks=list",
-    BASE + "/results/blocks.sd?r_date={d}&blocks=header%2Clist",
-    BASE + "/results-list/blocks.sd?r_date={d}&blocks=list",
-    BASE + "/results/list.sd?r_date={d}",
-    BASE + "/results/results.sd?r_date={d}",
-]
-RESULTADO_CANDIDATOS = [
-    BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=result",
-    BASE + "/result/blocks.sd?race_id={rid}&r_date={d}&blocks=result",
-    BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=header%2Cresult",
-    BASE + "/card/blocks.sd?race_id={rid}&r_date={d}&blocks=result",
-    BASE + "/card/blocks.sd?race_id={rid}&r_date={d}&blocks=card%2Cresult",
-    BASE + "/results/race.sd?race_id={rid}&r_date={d}",
-    BASE + "/card/race.sd?race_id={rid}&r_date={d}",
-]
+# Enderecos tentados para o resultado de UMA corrida (o primeiro que devolver galgos com posicao vence)
+RESULTADO_CANDIDATOS = (
+    [BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
+     for b in ("result", "results", "resultDetails", "raceResult", "header%2Cresult", "card%2Cresult")]
+    + [BASE + "/result/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
+       for b in ("result", "results", "header%2Cresult")]
+    + [BASE + "/card/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
+       for b in ("result", "results", "card%2Cresult")]
+    + [BASE + "/results/race.sd?race_id={rid}&r_date={d}",
+       BASE + "/result/race.sd?race_id={rid}&r_date={d}",
+       BASE + "/card/race.sd?race_id={rid}&r_date={d}"]
+)
 KEYS = {
     "id": ["raceId", "race_id", "rid"],
     "hora": ["raceDate", "offTime", "scheduledTime", "displayTime", "raceTime", "time", "startTime"],
@@ -45,8 +41,7 @@ KEYS = {
     "grade": ["raceClass", "raceGrade", "grade", "class", "raceClassDesc"],
     "dist": ["distMetres", "distMeters", "distance", "dist", "raceDistance"],
 }
-# campos de um galgo no resultado (primeiro que existir)
-RES = {
+RES = {   # campos de um galgo no resultado (primeiro que existir)
     "nome": ["dogName", "dog_name", "name"],
     "pos": ["finishPos", "finPos", "outcomeDesc", "position", "pos", "fin", "outcome", "result"],
     "trap": ["trapNum", "trap", "dogTrap"],
@@ -55,6 +50,45 @@ RES = {
     "margem": ["distBtn", "by", "beatenDistance"],
     "coment": ["closeUpCmnt", "comment", "cmnt", "commentary", "description"],
 }
+EXTRA = {"winsec": ["winnerOrSecond", "winSec", "wnSec", "winnerName", "secondName"],
+         "sp": ["SP", "sp", "startingPrice", "price"],
+         "trainer": ["trainerName", "trainer", "trainer_name"]}
+
+
+# ---------------------------------------------------------------- numeros dos galgos (padrao do site)
+BADGE_STYLE = {
+    1: "background:#d62828;color:#fff;",
+    2: "background:#1d4ed8;color:#fff;",
+    3: "background:#fff;color:#000;border:1px solid #000;",
+    4: "background:#111;color:#fff;border:1px solid #444;",
+    5: "background:#f97316;color:#fff;",
+    6: "background:repeating-linear-gradient(90deg,#111 0 4px,#fff 4px 8px);color:#e11;"
+       "text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 2px #fff;",
+}
+
+
+def badge(t):
+    try:
+        t = int(t)
+    except Exception:
+        return ""
+    return (f"<span style='display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;"
+            f"border-radius:4px;font-weight:700;font-size:14px;vertical-align:middle;{BADGE_STYLE.get(t, '')}'>{t}</span>")
+
+
+class _St:
+    """Faz o dib_core aceitar HTML nos st.markdown (necessario para os numeros coloridos)."""
+    def __getattr__(self, n):
+        return getattr(st, n)
+
+    def markdown(self, body, *a, **k):
+        k.setdefault("unsafe_allow_html", True)
+        return st.markdown(body, *a, **k)
+
+
+dib.st = _St()
+dib.TRAP_EMOJI = {t: badge(t) for t in range(1, 7)}
+dib.trap_label = lambda d: badge(d["trap"])
 
 
 # ---------------------------------------------------------------- leitura de JSON
@@ -71,7 +105,6 @@ def _hhmm(v):
 
 
 def achar_corridas(obj):
-    """Qualquer JSON -> corridas (precisa de raceId + horario)."""
     achados = {}
 
     def walk(o, pista_ctx):
@@ -100,14 +133,12 @@ def achar_corridas(obj):
 
 
 def achar_resultados(obj):
-    """Qualquer JSON -> linhas de resultado (galgo com posicao final)."""
     achados = {}
 
     def walk(o):
         if isinstance(o, dict):
             nome = _get(o, "nome", RES)
-            pos_raw = _get(o, "pos", RES)
-            m = re.search(r"\d+", str(pos_raw or ""))
+            m = re.search(r"\d+", str(_get(o, "pos", RES) or ""))
             if isinstance(nome, str) and m and 1 <= int(m.group()) <= 8:
                 t = re.search(r"\d+", str(_get(o, "trap", RES) or ""))
                 achados[nome] = {
@@ -125,18 +156,26 @@ def achar_resultados(obj):
     return sorted(achados.values(), key=lambda x: x["pos"])
 
 
+def _chaves(js):
+    if not isinstance(js, dict):
+        return type(js).__name__
+    return ", ".join(f"{k}{'(erro)' if isinstance(v, dict) and 'errorCode' in v else ''}" for k, v in js.items())[:90]
+
+
 def tentar(urls, parser):
     tentativas, achado, primeira = [], [], None
     for u in urls:
+        curto = u.replace(BASE, "")
         try:
-            r = requests.get(u, headers=dib.HEADERS, timeout=12)
+            r = requests.get(u, headers=dib.HEADERS, timeout=8)
             js = r.json() if r.status_code == 200 else None
         except Exception as e:
-            tentativas.append({"URL": u, "Status": f"erro: {str(e)[:50]}", "Achados": 0})
+            tentativas.append({"Endereço": curto, "Status": f"erro: {str(e)[:40]}", "Achados": 0, "Chaves": ""})
             continue
         res = parser(js) if js is not None else []
-        tentativas.append({"URL": u, "Status": r.status_code, "Achados": len(res)})
-        if primeira is None and js is not None:
+        tentativas.append({"Endereço": curto, "Status": r.status_code, "Achados": len(res),
+                           "Chaves": _chaves(js) if js is not None else ""})
+        if primeira is None and js is not None and not res:
             primeira = js
         if res:
             achado = res
@@ -145,17 +184,26 @@ def tentar(urls, parser):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def buscar_lista(data_str, url_custom, modo):
-    base = LISTA_RES_CANDIDATOS if modo == "res" else LISTA_CANDIDATOS
+def buscar_lista(data_str, url_custom):
     urls = ([url_custom.replace("{data}", data_str)] if url_custom.strip() else []) \
-        + [u.format(d=data_str) for u in base]
+        + [u.format(d=data_str) for u in LISTA_CANDIDATOS]
     return tentar(urls, achar_corridas)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def buscar_resultado(race_id, data_str):
-    urls = [u.format(rid=race_id, d=data_str) for u in RESULTADO_CANDIDATOS]
-    return tentar(urls, achar_resultados)
+    return tentar([u.format(rid=race_id, d=data_str) for u in RESULTADO_CANDIDATOS], achar_resultados)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def buscar_form_raw(race_id, data_str):
+    try:
+        r = requests.get(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form",
+                         headers=dib.HEADERS, timeout=15)
+        r.raise_for_status()
+        return r.json().get("form", {}).get("dogs", [])
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------- utilidades
@@ -179,7 +227,6 @@ def escolher(c, data_str, modo):
 
 
 def fechar_sidebar():
-    """No celular, recolhe a barra lateral depois de escolher a corrida."""
     components.html(
         """<script>
         try {
@@ -192,6 +239,10 @@ def fechar_sidebar():
           }
         } catch (e) {}
         </script>""", height=0)
+
+
+def tabela_html(headers, rows):
+    st.markdown(dib.tbl(headers, rows), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- analise
@@ -223,9 +274,11 @@ def preparar(race_id, r_date, c, classe_in, dist_in, pp_in, so_antes=False):
     return {"ds": ds, "rank": rank, "ctx": ctx, "s1": s1, "classe": classe, "dist": dist, "pp": pp}
 
 
-def titulo_corrida(c, p, prefixo=""):
+def titulo_corrida(c, p=None, prefixo=""):
     t = f"{c['pista']} {c['hora']} (BR {hora_br(c['hora'])})" if c.get("hora") else ""
-    return f"### {prefixo}{t} · Race {c.get('num', '')} · {p['classe']} · {int(p['dist'])}m · POST PICK: {p['pp'] or '-'}"
+    extra = f" · {p['classe']} · {int(p['dist'])}m · POST PICK: {p['pp'] or '-'}" if p else \
+        f" · {c.get('grade', '')} · {c.get('dist', '')}m"
+    return f"### {prefixo}{t} · Race {c.get('num', '')}{extra}"
 
 
 def analisar(c, classe_in, dist_in, pp_in):
@@ -236,30 +289,62 @@ def analisar(c, classe_in, dist_in, pp_in):
     st.markdown("#### Planilha de Projeção")
     st.markdown(dib.tabela_projecao(p["ds"]), unsafe_allow_html=True)
     st.markdown("**Classificação:** " + " > ".join(
-        f"{dib.MEDALS.get(d['pos'], str(d['pos']) + 'º')} {dib.TRAP_EMOJI[d['trap']]} {d['trap']}" for d in p["rank"]))
+        f"{dib.MEDALS.get(d['pos'], str(d['pos']) + 'º')} {badge(d['trap'])}" for d in p["rank"]),
+        unsafe_allow_html=True)
     dib.tabela_avb(p["s1"], "1ª Planilha — AVB Principal (Prob ≥ 60%)")
     if hasattr(dib, "gerar_observacoes"):
         dib.gerar_observacoes(p["rank"], p["s1"], p["ctx"])
 
 
+# ---------------------------------------------------------------- aba Form
+def mostrar_form(c):
+    raw = buscar_form_raw(c["id"], c["data"])
+    st.markdown(titulo_corrida(c, None, "📄 Form · "))
+    if not raw:
+        st.warning("Não consegui carregar o Form desta corrida.")
+        return
+    dib.descobrir_chaves(raw)
+    heads = ["Data", "Pista", "Dis", "Trp", "Split", "Bends", "Fin", "By", "Win/Sec", "Remarks",
+             "WnTm", "Gng", "Wght", "SP", "Grade", "CalTm"]
+    for dog in sorted(raw, key=lambda x: int(re.search(r"\d+", str(x.get("trapNum", 9))).group())
+                      if re.search(r"\d+", str(x.get("trapNum", ""))) else 9):
+        trap = re.search(r"\d+", str(dog.get("trapNum", "")))
+        trainer = _get(dog, "trainer", EXTRA) or ""
+        peso = dog.get("weight") or ""
+        st.markdown(f"{badge(trap.group()) if trap else ''} **{dog.get('dogName', '?')}**"
+                    f"{' · Tnr: ' + str(trainer) if trainer else ''}{' · ' + str(peso) + ' kg' if peso else ''}",
+                    unsafe_allow_html=True)
+        rows = []
+        for f in dog.get("forms", []):
+            n = dib.norm_run(f)
+            g = lambda k: dib.pick_fb(f, k)
+            data = n["date"].strftime("%d%b%y") if n["date"] else n["date_str"]
+            rows.append([data, n["track"], f"{int(n['dist'])}m" if n["dist"] else "", n["trap"] or "",
+                         g("split") or "", n["bends"], g("fin") or "", g("by") or "",
+                         _get(f, "winsec", EXTRA) or "", g("remarks") or "", g("wntm") or "",
+                         g("gng") or "", g("weight") or "", _get(f, "sp", EXTRA) or "",
+                         n["grade"], g("caltm") or ""])
+        if rows:
+            tabela_html(heads, rows)
+        else:
+            st.caption("Sem corridas anteriores (galgo vacant ou sem histórico).")
+
+
 # ---------------------------------------------------------------- resultados
 def mostrar_resultado(c, classe_in, dist_in, pp_in):
     linhas, tent, primeira = buscar_resultado(c["id"], c["data"])
-    cab = f"{c.get('pista', '')} {c.get('hora', '')} · Race {c.get('num', '')} · {c.get('grade', '')} · {c.get('dist', '')}m"
-    st.markdown(f"### 📊 Resultado · {cab}")
+    st.markdown(titulo_corrida(c, None, "📊 Resultado · "))
     if not linhas:
-        st.warning("Não consegui ler o resultado desta corrida (ela pode ainda não ter sido disputada).")
-        with st.expander("🔎 Diagnóstico do resultado"):
-            st.dataframe(pd.DataFrame(tent), use_container_width=True, hide_index=True)
-            if primeira is not None:
-                st.json(primeira if len(str(primeira)) < 6000 else {"(cortado)": str(primeira)[:6000]})
+        st.warning("Não consegui ler o resultado desta corrida (ela pode ainda não ter sido disputada). "
+                   "Veja o diagnóstico abaixo.")
+        st.dataframe(pd.DataFrame(tent), use_container_width=True, hide_index=True)
+        if primeira is not None:
+            st.caption("Primeira resposta recebida:")
+            st.json(primeira if len(str(primeira)) < 6000 else {"(cortado)": str(primeira)[:6000]})
         return
-    tab = pd.DataFrame([{
-        "Pos": f"{l['pos']}º", "Trap": f"{dib.TRAP_EMOJI.get(l['trap'], '')} {l['trap'] or ''}",
-        "Galgo": l["nome"], "SP": l["sp"], "Tempo": l["tempo"], "Margem": l["margem"],
-        "Comentário": l["coment"]} for l in linhas])
-    st.dataframe(tab, use_container_width=True, hide_index=True)
-
+    tabela_html(["Pos", "Trap", "Galgo", "SP", "Tempo", "Margem", "Comentário"],
+                [[f"{l['pos']}º", badge(l["trap"]), l["nome"], l["sp"], l["tempo"], l["margem"], l["coment"]]
+                 for l in linhas])
     try:   # comparacao: previsto x real
         p = preparar(c["id"], c["data"], c, classe_in, dist_in, pp_in, so_antes=True)
         if not p or not p["rank"]:
@@ -267,30 +352,23 @@ def mostrar_resultado(c, classe_in, dist_in, pp_in):
         prev = {d["trap"]: d["pos"] for d in p["rank"]}
         real = {l["trap"]: l["pos"] for l in linhas if l["trap"]}
         st.markdown("#### 🔍 Previsto × Real (projeção só com corridas anteriores)")
-        comp = pd.DataFrame([{"Real": f"{l['pos']}º", "Galgo": f"{dib.TRAP_EMOJI.get(l['trap'], '')} {l['nome']}",
-                              "Previsto": f"{prev.get(l['trap'], '-')}º"} for l in linhas])
-        st.dataframe(comp, use_container_width=True, hide_index=True)
-        fav = p["rank"][0]
-        venc = linhas[0]
+        tabela_html(["Real", "Galgo", "Previsto"],
+                    [[f"{l['pos']}º", f"{badge(l['trap'])} {l['nome']}", f"{prev.get(l['trap'], '-')}º"]
+                     for l in linhas])
+        fav, venc = p["rank"][0], linhas[0]
         top3_prev = {d["trap"] for d in p["rank"][:3]}
         top3_real = {l["trap"] for l in linhas[:3] if l["trap"]}
-        st.markdown(f"- **Vencedor:** previsto {dib.TRAP_EMOJI[fav['trap']]} {fav['name']} → "
-                    f"{'✅ acertou' if fav['trap'] == venc['trap'] else '❌ venceu ' + venc['nome']}")
+        st.markdown(f"- **Vencedor:** previsto {badge(fav['trap'])} {fav['name']} → "
+                    f"{'✅ acertou' if fav['trap'] == venc['trap'] else '❌ venceu ' + venc['nome']}",
+                    unsafe_allow_html=True)
         st.markdown(f"- **Top 3:** {len(top3_prev & top3_real)} de 3 galgos previstos entre os 3 primeiros.")
         if p["s1"]:
             st.markdown("**AVBs (≥ 60%):**")
             for (V, D, prob, star) in p["s1"]:
                 pv, pd_ = real.get(V["trap"]), real.get(D["trap"])
-                if pv and pd_:
-                    ok = "✅" if pv < pd_ else "❌"
-                elif pv:
-                    ok = "✅"
-                elif pd_:
-                    ok = "❌"
-                else:
-                    ok = "—"
-                st.markdown(f"- {ok} {dib.TRAP_EMOJI[V['trap']]} {V['name']} ({pv or '-'}º) vence "
-                            f"{dib.TRAP_EMOJI[D['trap']]} {D['name']} ({pd_ or '-'}º) · {prob:.1f}%")
+                ok = ("✅" if pv < pd_ else "❌") if (pv and pd_) else ("✅" if pv else ("❌" if pd_ else "—"))
+                st.markdown(f"- {ok} {badge(V['trap'])} {V['name']} ({pv or '-'}º) vence "
+                            f"{badge(D['trap'])} {D['name']} ({pd_ or '-'}º) · {prob:.1f}%", unsafe_allow_html=True)
         else:
             st.markdown("- Nenhum AVB ≥ 60% nesta corrida.")
     except Exception as e:
@@ -312,16 +390,21 @@ def main():
             dist_in = st.number_input("Distância (m) - 0 = da lista", value=0, step=10)
             pp_in = st.text_input("Post Pick (ex: 1-2-3)", value="")
             url_custom = st.text_input("Endereço da lista (use {data})", value="")
-        corridas, tentativas, primeira = buscar_lista(data_str, url_custom, modo)
+        corridas, tentativas, primeira = buscar_lista(data_str, url_custom)
 
         sel = st.session_state.get("sel")
         if corridas:
             pistas = sorted({c["pista"] for c in corridas})
             filtro = st.multiselect("Pistas (vazio = todas)", pistas)
             lista = [c for c in corridas if not filtro or c["pista"] in filtro]
-            if ocultar and data == agora_uk().date():
-                limite = agora_uk().strftime("%H:%M")
+            hoje = data == agora_uk().date()
+            limite = agora_uk().strftime("%H:%M")
+            if modo == "ana" and ocultar and hoje:
                 lista = [c for c in lista if c["hora"] >= limite]
+            if modo == "res":   # resultados: so corridas que ja foram disputadas, mais recentes primeiro
+                if hoje:
+                    lista = [c for c in lista if c["hora"] < limite]
+                lista = sorted(lista, key=lambda c: (c["hora"], c["pista"]), reverse=True)
             st.caption(f"{len(lista)} corridas · horário da pista (Brasil = −3h)")
             for c in lista:
                 ativo = sel and sel.get("id") == c["id"] and sel.get("modo") == modo
@@ -352,9 +435,15 @@ def main():
     sel = st.session_state.get("sel")
     if sel:
         if sel.get("modo") == "res":
-            mostrar_resultado(sel, classe_in, dist_in, pp_in)
+            aba1, aba2 = st.tabs(["📊 Resultado", "📄 Form"])
+            with aba1:
+                mostrar_resultado(sel, classe_in, dist_in, pp_in)
         else:
-            analisar(sel, classe_in, dist_in, pp_in)
+            aba1, aba2 = st.tabs(["📋 Análise", "📄 Form"])
+            with aba1:
+                analisar(sel, classe_in, dist_in, pp_in)
+        with aba2:
+            mostrar_form(sel)
         if st.session_state.pop("fechar", False):
             fechar_sidebar()
 
