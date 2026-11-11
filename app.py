@@ -27,9 +27,9 @@ CANDIDATOS = [
 ]
 KEYS = {
     "id": ["raceId", "race_id", "rid"],
-    "hora": ["offTime", "scheduledTime", "displayTime", "raceTime", "time", "startTime"],
+    "hora": ["raceDate", "offTime", "scheduledTime", "displayTime", "raceTime", "time", "startTime"],
     "pista": ["trackName", "track", "meetingName", "courseName", "venue"],
-    "num": ["raceNum", "raceNumber", "rNum", "number", "raceNo"],
+    "num": ["raceTitle", "raceNum", "raceNumber", "rNum", "number", "raceNo"],
     "grade": ["raceClass", "raceGrade", "grade", "class", "raceClassDesc"],
     "dist": ["distMetres", "distMeters", "distance", "dist", "raceDistance"],
 }
@@ -61,7 +61,7 @@ def achar_corridas(obj):
             if rid is not None and re.fullmatch(r"\d{5,9}", str(rid)) and hora:
                 g, d = _get(o, "grade"), _get(o, "dist")
                 achados[str(rid)] = {
-                    "id": str(rid), "hora": hora, "pista": pista_ctx or "?",
+                    "id": str(rid), "hora": hora, "pista": (pista_ctx or "?").title(),
                     "num": str(_get(o, "num") or "").replace("Race", "").strip(),
                     "grade": re.sub(r"[()\s]", "", str(g or "")).upper(),
                     "dist": int(re.sub(r"\D", "", str(d))) if d and re.search(r"\d", str(d)) else 0,
