@@ -31,7 +31,7 @@ DICIONARIO_REMARKS = {
 }
 
 # =====================================================================
-# CONFIGURAÇÃO GLOBAL (DIB 3.3 - DUELO DIRETO + CONFLITO DE PACE)
+# CONFIGURAÇÃO GLOBAL (DIB 3.4 - OVERALL ALINHADO E TOP 4 PURO)
 # =====================================================================
 CFG = {
     "N_RUNS": 5, "N_CORREDORES": 6, "CAT_BONUS": 2.0,
@@ -39,8 +39,10 @@ CFG = {
     "PERFIL_PTS": {"Limpo": 5.0, "Irregular": 2.0, "Trombador": 0.0},
     "REMARKS_PTS": {"early": 1.0, "slowaway": -1.0, "firstbend": -1.0},
     "TRAP_VAZIA": 1.0, "TRAFEGO_SEVERO": -2.0, "CONF_MIN_VENCEDOR": 60.0,
-    "VEL_PTS": {"tadj": 60, "mtime": 40, "msplit": 60, "ritmo": 40},
-    "CONSIST_PTS": 30, "PICO_PTS": 20, "RECUP_PTS": 20,
+    
+    # NOVOS PESOS DE VELOCIDADE (DOMINAM O OVERALL)
+    "VEL_PTS": {"tadj": 100, "mtime": 80, "msplit": 80, "ritmo": 60},
+    "CONSIST_PTS": 30, "PICO_PTS": 20, "RECUP_PTS": 10, # Recup reduzida pela metade
 }
 
 FIELD_MAP = {
@@ -370,7 +372,10 @@ def finalizar(ds, ctx):
         return maxp * (hi - d[key]) / (hi - lo) if invert else maxp * (d[key] - lo) / (hi - lo)
 
     for d in ok:
-        pts_cat, pts_perfil = d["cat"] * 2, CFG["PERFIL_PTS"][d["perfil"]]
+        # NOVA FÓRMULA DO OVERALL (VELOCIDADE DOMINANTE)
+        pts_cat = d["cat"] * 1.5
+        pts_perfil = CFG["PERFIL_PTS"][d["perfil"]]
+        
         vel = (pts_prop("tadj", CFG["VEL_PTS"]["tadj"], d) + 
                pts_prop("mtime", CFG["VEL_PTS"]["mtime"], d) + 
                pts_prop("msplit", CFG["VEL_PTS"]["msplit"], d) + 
@@ -400,7 +405,7 @@ def finalizar(ds, ctx):
     return ok, top3_ms
 
 # =====================================================================
-# NOVO CÁLCULO DE AVB (DIB 3.3 - DUELO DIRETO + CONFLITO DE PACE)
+# NOVO CÁLCULO DE AVB (DIB 3.4 - DUELO DIRETO + CONFLITO DE PACE)
 # =====================================================================
 def calc_prob(V, D, rank, ctx):
     prob = 50.0
@@ -439,22 +444,22 @@ def calc_prob(V, D, rank, ctx):
     pts_seguranca += (diff_perfil * 2.5)
     prob += pts_seguranca
 
-    # 5. CONFLITO DE PACE (NOVA REGRA)
+    # 5. CONFLITO DE PACE
     top3_ms = ctx.get("top3_ms", set())
     top3_ritmo = ctx.get("top3_ritmo", set())
-    epfs = [d for d in rank if d["name"] in top3_ms] # Cães com largada rápida no páreo
+    epfs = [d for d in rank if d["name"] in top3_ms]
 
     if V["name"] in top3_ms:
         if D["name"] in top3_ms:
-            prob -= 3.0 # Ambos são rápidos, vão brigar diretamente
+            prob -= 3.0 
         else:
-            prob -= 5.0 # V vai ter que brigar com outro cão da prova pela ponta
+            prob -= 5.0 
     elif D["name"] in top3_ms:
-        prob += 5.0 # D vai se atrapalhar brigando pela ponta
+        prob += 5.0 
 
     if V["name"] in top3_ritmo and V["name"] not in top3_ms:
         if len(epfs) >= 2:
-            prob += 5.0 # V é um "Closer" e há 2+ cães rápidos brigando na frente
+            prob += 5.0 
 
     # Ajustes Táticos
     if V["trap"] in ctx["post_pick"]: prob += 2.0
@@ -465,6 +470,7 @@ def calc_prob(V, D, rank, ctx):
     return max(25.0, min(75.0, prob))
 
 def montar_avbs(rank, ctx):
+    # DIB 3.4: Pega o Top 4 puro (incluindo os bloqueados), para cobrir a casa
     top4 = [d for d in rank if d.get("name") != "vacant"][:4]
     if len(top4) < 2: return [], [], []
     
@@ -596,8 +602,8 @@ def tabela_avb(lista, titulo):
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
 def main():
-    st.set_page_config(page_title="DIB GREYHOUND 3.3", layout="wide")
-    st.title("🐾 DIB GREYHOUND 3.3")
+    st.set_page_config(page_title="DIB GREYHOUND 3.4", layout="wide")
+    st.title("🐾 DIB GREYHOUND 3.4")
 
     url_alvo = st.text_input("Link", placeholder="Cole o link da corrida aqui...", label_visibility="collapsed")
 
