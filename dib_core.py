@@ -409,28 +409,24 @@ def calc_prob(V, D, rank, ctx):
     prob = 50.0
     if V.get("tadj") is None or D.get("tadj") is None: return 50.0
 
-    # 1. PILAR VELOCIDADE
     diff_tadj = D["tadj"] - V["tadj"]
     diff_mtime = D["mtime"] - V["mtime"] if D.get("mtime") is not None and V.get("mtime") is not None else 0
     pts_vel = ((diff_tadj + diff_mtime) / 0.10) * 4.0
     pts_vel = max(-15.0, min(15.0, pts_vel))
     prob += pts_vel
     
-    # 2. PILAR LARGADA
     if V.get("msplit") and D.get("msplit"):
         diff_split = D["msplit"] - V["msplit"]
         pts_split = (diff_split / 0.05) * 3.0
         pts_split = max(-10.0, min(10.0, pts_split))
         prob += pts_split
         
-    # 3. PILAR RITMO FINAL
     if V.get("ritmo") and D.get("ritmo"):
         diff_ritmo = D["ritmo"] - V["ritmo"]
         pts_ritmo = (diff_ritmo / 0.05) * 2.0
         pts_ritmo = max(-6.0, min(6.0, pts_ritmo))
         prob += pts_ritmo
         
-    # 4. PILAR SEGURANÇA E RECUPERAÇÃO
     pts_seguranca = 0.0
     if V.get("rec") is not None and D.get("rec") is not None:
         diff_rec = V["rec"] - D["rec"]
@@ -442,24 +438,18 @@ def calc_prob(V, D, rank, ctx):
     pts_seguranca += (diff_perfil * 2.5)
     prob += pts_seguranca
 
-    # 5. CONFLITO DE PACE
     top3_ms = ctx.get("top3_ms", set())
     top3_ritmo = ctx.get("top3_ritmo", set())
     epfs = [d for d in rank if d["name"] in top3_ms]
 
     if V["name"] in top3_ms:
-        if D["name"] in top3_ms:
-            prob -= 3.0 
-        else:
-            prob -= 5.0 
-    elif D["name"] in top3_ms:
-        prob += 5.0 
+        if D["name"] in top3_ms: prob -= 3.0 
+        else: prob -= 5.0 
+    elif D["name"] in top3_ms: prob += 5.0 
 
     if V["name"] in top3_ritmo and V["name"] not in top3_ms:
-        if len(epfs) >= 2:
-            prob += 5.0 
+        if len(epfs) >= 2: prob += 5.0 
 
-    # Ajustes Táticos
     if V["trap"] in ctx["post_pick"]: prob += 2.0
     if V["trap"] in [1,2,3] and D["trap"] in [4,5,6]: prob += 2.0
     if any(abs(V["trap"] - v) == 1 for v in ctx["vazias"]): prob += 1.5
@@ -469,7 +459,7 @@ def calc_prob(V, D, rank, ctx):
 
 def montar_avbs(rank, ctx):
     top4 = [d for d in rank if d.get("name") != "vacant"][:4]
-    if len(top4) < 2: return [], [], []
+    if len(top4) < 2: return []
     
     s1 = []
     
@@ -486,7 +476,7 @@ def montar_avbs(rank, ctx):
             if prob >= 60.0:
                 s1.append((V, D, prob, True))
                 
-    return sorted(s1, key=lambda x: -x[2]), [], []
+    return sorted(s1, key=lambda x: -x[2])
 
 def get_rank_html(val, rank, max_rank):
     if val is None or rank is None: return "-"
@@ -596,9 +586,6 @@ def tabela_avb(lista, titulo):
     heads = ["AvB", "Overall", "Cat", "Perfil", "Grades", "Peso", "Dias", "Split", "Time", "Time Ajust.", "Méd. Split", "Méd. Time", "Ritmo", "Recup.", "Conf.", "Probabilidade"]
     st.markdown(tbl(heads, rows), unsafe_allow_html=True)
 
-# =====================================================================
-# NOVA FUNÇÃO DE OBSERVAÇÕES INDISPENSÁVEIS
-# =====================================================================
 def gerar_observacoes(rank, avbs, ctx):
     if not rank: return
     st.markdown("---")
@@ -661,11 +648,11 @@ def main():
             
             st.markdown("**Classificação:** " + " > ".join(f"{MEDALS.get(d['pos'], str(d['pos'])+'º')} {TRAP_EMOJI[d['trap']]} {d['trap']}" for d in rank))
             
-            s1, s2, s3 = montar_avbs(rank, ctx)
-            # Exibe apenas a planilha principal (>= 60%)
+            # Retorna apenas a lista principal (>=60%)
+            s1 = montar_avbs(rank, ctx)
+            
             tabela_avb(s1, "1ª Planilha — AVB Principal (Prob ≥ 60%)")
             
-            # Adiciona as Observações
             gerar_observacoes(rank, s1, ctx)
 
 if __name__ == "__main__":
