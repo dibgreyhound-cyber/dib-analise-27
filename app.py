@@ -15,6 +15,40 @@ st.set_page_config(page_title="DIB GREYHOUND", layout="wide", initial_sidebar_st
 import dib_core as dib
 
 BASE = "https://greyhoundbet.racingpost.com"
+
+# ----------------------------------------------------------------
+# CORREÇÃO DO ERRO 403 (BLOQUEIO DO RACING POST)
+# ----------------------------------------------------------------
+HEADERS_ROBUSTOS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://greyhoundbet.racingpost.com/",
+    "Origin": "https://greyhoundbet.racingpost.com",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Connection": "keep-alive",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+# Atualiza os headers do dib_core para evitar erro 403 lá também
+dib.HEADERS.update(HEADERS_ROBUSTOS)
+
+def get_racingpost(url):
+    """Usa uma sessão para pegar cookies do site antes de chamar a API (evita bloqueio 403)."""
+    session = requests.Session()
+    session.headers.update(HEADERS_ROBUSTOS)
+    try:
+        # Passa pela home para pegar o cookie de proteção (Cloudflare/Akamai)
+        session.get("https://greyhoundbet.racingpost.com/", timeout=10)
+        # Faz a requisição real da lista
+        return session.get(url, timeout=12)
+    except Exception:
+        # Fallback caso a home caia
+        return requests.get(url, headers=HEADERS_ROBUSTOS, timeout=12)
+# ----------------------------------------------------------------
+
 LISTA_CANDIDATOS = [
     BASE + "/meeting/blocks.sd?r_date={d}&blocks=header%2Clist",
     BASE + "/meeting/blocks.sd?r_date={d}&blocks=list",
@@ -167,7 +201,7 @@ def tentar(urls, parser):
     for u in urls:
         curto = u.replace(BASE, "")
         try:
-            r = requests.get(u, headers=dib.HEADERS, timeout=8)
+            r = get_racingpost(u)  # <-- CORREÇÃO APLICADA AQUI
             js = r.json() if r.status_code == 200 else None
         except Exception as e:
             tentativas.append({"Endereço": curto, "Status": f"erro: {str(e)[:40]}", "Achados": 0, "Chaves": ""})
@@ -198,8 +232,7 @@ def buscar_resultado(race_id, data_str):
 @st.cache_data(ttl=300, show_spinner=False)
 def buscar_form_raw(race_id, data_str):
     try:
-        r = requests.get(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form",
-                         headers=dib.HEADERS, timeout=15)
+        r = get_racingpost(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form")  # <-- CORREÇÃO APLICADA AQUI
         r.raise_for_status()
         return r.json().get("form", {}).get("dogs", [])
     except Exception:
