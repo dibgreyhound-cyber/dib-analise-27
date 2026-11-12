@@ -7,9 +7,11 @@ import re
 from datetime import datetime, timedelta
 
 import pandas as pd
-import requests
 import streamlit as st
 import streamlit.components.v1 as components
+
+# --- CORREÇÃO 403: Usando curl_cffi para imitar o fingerprint do Chrome ---
+from curl_cffi import requests as requests_cffi
 
 st.set_page_config(page_title="DIB GREYHOUND", layout="wide", initial_sidebar_state="auto")
 import dib_core as dib
@@ -17,36 +19,25 @@ import dib_core as dib
 BASE = "https://greyhoundbet.racingpost.com"
 
 # ----------------------------------------------------------------
-# CORREÇÃO DO ERRO 403 (BLOQUEIO DO RACING POST)
+# CORREÇÃO DO ERRO 403 (BLOQUEIO ANTI-BOT DO RACING POST)
 # ----------------------------------------------------------------
-HEADERS_ROBUSTOS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://greyhoundbet.racingpost.com/",
-    "Origin": "https://greyhoundbet.racingpost.com",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "Connection": "keep-alive",
-    "X-Requested-With": "XMLHttpRequest",
-}
-
-# Atualiza os headers do dib_core para evitar erro 403 lá também
-dib.HEADERS.update(HEADERS_ROBUSTOS)
-
 def get_racingpost(url):
-    """Usa uma sessão para pegar cookies do site antes de chamar a API (evita bloqueio 403)."""
-    session = requests.Session()
-    session.headers.update(HEADERS_ROBUSTOS)
+    """Usa curl_cffi para simular um navegador Chrome real e evitar o bloqueio 403."""
     try:
-        # Passa pela home para pegar o cookie de proteção (Cloudflare/Akamai)
-        session.get("https://greyhoundbet.racingpost.com/", timeout=10)
-        # Faz a requisição real da lista
-        return session.get(url, timeout=12)
-    except Exception:
-        # Fallback caso a home caia
-        return requests.get(url, headers=HEADERS_ROBUSTOS, timeout=12)
+        # Cria uma sessão que imita o Chrome 120
+        session = requests_cffi.Session(impersonate="chrome120")
+        
+        # Passa pela home primeiro para pegar os cookies de proteção (Cloudflare/Akamai)
+        session.get("https://greyhoundbet.racingpost.com/", timeout=15)
+        
+        # Faz a requisição real com os cookies obtidos
+        response = session.get(url, timeout=15)
+        return response
+    except Exception as e:
+        print(f"Erro na requisição: {e}")
+        # Fallback seguro caso o curl_cffi falhe
+        import requests
+        return requests.get(url, timeout=15)
 # ----------------------------------------------------------------
 
 LISTA_CANDIDATOS = [
@@ -55,7 +46,6 @@ LISTA_CANDIDATOS = [
     BASE + "/meeting-list/blocks.sd?r_date={d}&blocks=list",
     BASE + "/meeting/list.sd?r_date={d}",
 ]
-# Enderecos tentados para o resultado de UMA corrida (o primeiro que devolver galgos com posicao vence)
 RESULTADO_CANDIDATOS = (
     [BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
      for b in ("result", "results", "resultDetails", "raceResult", "header%2Cresult", "card%2Cresult")]
@@ -75,7 +65,7 @@ KEYS = {
     "grade": ["raceClass", "raceGrade", "grade", "class", "raceClassDesc"],
     "dist": ["distMetres", "distMeters", "distance", "dist", "raceDistance"],
 }
-RES = {   # campos de um galgo no resultado (primeiro que existir)
+RES = {
     "nome": ["dogName", "dog_name", "name"],
     "pos": ["finishPos", "finPos", "outcomeDesc", "position", "pos", "fin", "outcome", "result"],
     "trap": ["trapNum", "trap", "dogTrap"],
@@ -88,8 +78,6 @@ EXTRA = {"winsec": ["winnerOrSecond", "winSec", "wnSec", "winnerName", "secondNa
          "sp": ["SP", "sp", "startingPrice", "price"],
          "trainer": ["trainerName", "trainer", "trainer_name"]}
 
-
-# ---------------------------------------------------------------- numeros dos galgos (padrao do site)
 BADGE_STYLE = {
     1: "background:#d62828;color:#fff;",
     2: "background:#1d4ed8;color:#fff;",
@@ -100,7 +88,6 @@ BADGE_STYLE = {
        "text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 2px #fff;",
 }
 
-
 def badge(t):
     try:
         t = int(t)
@@ -109,9 +96,7 @@ def badge(t):
     return (f"<span style='display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;"
             f"border-radius:4px;font-weight:700;font-size:14px;vertical-align:middle;{BADGE_STYLE.get(t, '')}'>{t}</span>")
 
-
 class _St:
-    """Faz o dib_core aceitar HTML nos st.markdown (necessario para os numeros coloridos)."""
     def __getattr__(self, n):
         return getattr(st, n)
 
@@ -119,24 +104,19 @@ class _St:
         k.setdefault("unsafe_allow_html", True)
         return st.markdown(body, *a, **k)
 
-
 dib.st = _St()
 dib.TRAP_EMOJI = {t: badge(t) for t in range(1, 7)}
 dib.trap_label = lambda d: badge(d["trap"])
 
-
-# ---------------------------------------------------------------- leitura de JSON
 def _get(d, k, tabela=KEYS):
     for key in tabela[k]:
         if key in d and d[key] not in (None, "", {}, []):
             return d[key]
     return None
 
-
 def _hhmm(v):
     m = re.search(r"(\d{1,2}):(\d{2})", str(v or ""))
     return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
-
 
 def achar_corridas(obj):
     achados = {}
@@ -165,7 +145,6 @@ def achar_corridas(obj):
     walk(obj, "")
     return sorted(achados.values(), key=lambda c: (c["hora"], c["pista"]))
 
-
 def achar_resultados(obj):
     achados = {}
 
@@ -189,19 +168,17 @@ def achar_resultados(obj):
     walk(obj)
     return sorted(achados.values(), key=lambda x: x["pos"])
 
-
 def _chaves(js):
     if not isinstance(js, dict):
         return type(js).__name__
     return ", ".join(f"{k}{'(erro)' if isinstance(v, dict) and 'errorCode' in v else ''}" for k, v in js.items())[:90]
-
 
 def tentar(urls, parser):
     tentativas, achado, primeira = [], [], None
     for u in urls:
         curto = u.replace(BASE, "")
         try:
-            r = get_racingpost(u)  # <-- CORREÇÃO APLICADA AQUI
+            r = get_racingpost(u)  # <-- Usa a nova função com curl_cffi
             js = r.json() if r.status_code == 200 else None
         except Exception as e:
             tentativas.append({"Endereço": curto, "Status": f"erro: {str(e)[:40]}", "Achados": 0, "Chaves": ""})
@@ -216,35 +193,29 @@ def tentar(urls, parser):
             break
     return achado, tentativas, primeira
 
-
 @st.cache_data(ttl=120, show_spinner=False)
 def buscar_lista(data_str, url_custom):
     urls = ([url_custom.replace("{data}", data_str)] if url_custom.strip() else []) \
         + [u.format(d=data_str) for u in LISTA_CANDIDATOS]
     return tentar(urls, achar_corridas)
 
-
 @st.cache_data(ttl=60, show_spinner=False)
 def buscar_resultado(race_id, data_str):
     return tentar([u.format(rid=race_id, d=data_str) for u in RESULTADO_CANDIDATOS], achar_resultados)
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def buscar_form_raw(race_id, data_str):
     try:
-        r = get_racingpost(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form")  # <-- CORREÇÃO APLICADA AQUI
+        r = get_racingpost(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form")  # <-- Atualizado
         r.raise_for_status()
         return r.json().get("form", {}).get("dogs", [])
     except Exception:
         return []
 
-
-# ---------------------------------------------------------------- utilidades
 def hora_br(hhmm):
     h, m = [int(x) for x in hhmm.split(":")]
     t = datetime(2000, 1, 1, h, m) - timedelta(hours=3)
     return f"{t.hour % 12 or 12}:{t.minute:02d}"
-
 
 def agora_uk():
     try:
@@ -253,11 +224,9 @@ def agora_uk():
     except Exception:
         return datetime.utcnow()
 
-
 def escolher(c, data_str, modo):
     st.session_state["sel"] = dict(c, data=data_str, modo=modo)
     st.session_state["fechar"] = True
-
 
 def fechar_sidebar():
     components.html(
@@ -273,22 +242,22 @@ def fechar_sidebar():
         } catch (e) {}
         </script>""", height=0)
 
-
 def tabela_html(headers, rows):
     st.markdown(dib.tbl(headers, rows), unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------- analise
 def preparar(race_id, r_date, c, classe_in, dist_in, pp_in, so_antes=False):
     cache = st.session_state.setdefault("cache_corridas", {})
     chave = f"{race_id}|{r_date}"
     if chave not in cache:
+        # A função extrair_dados_racingpost usa dib.HEADERS internamente.
+        # Como não podemos alterar o dib_core, o bloqueio pode persistir aqui.
+        # Se ocorrer erro 403 nesta parte, será necessário alterar o dib_core para usar curl_cffi também.
         res = dib.extrair_dados_racingpost(f"{BASE}/#card/race_id={race_id}&r_date={r_date}")
         if not res or not res[0]:
             return None
         cache[chave] = res
     dogs, meta, meta_info = cache[chave]
-    if so_antes:   # para comparar com o resultado, usa so corridas ANTERIORES a esta data
+    if so_antes:
         dogs = [dict(d, runs=[r for r in d["runs"] if (r.get("date_str") or "") < r_date]) for d in dogs]
     classe = (classe_in or c.get("grade") or (meta_info or {}).get("classe") or "").strip().upper()
     dist = float(dist_in or c.get("dist") or 0)
@@ -306,13 +275,11 @@ def preparar(race_id, r_date, c, classe_in, dist_in, pp_in, so_antes=False):
     s1 = res[0] if isinstance(res, tuple) else res
     return {"ds": ds, "rank": rank, "ctx": ctx, "s1": s1, "classe": classe, "dist": dist, "pp": pp}
 
-
 def titulo_corrida(c, p=None, prefixo=""):
     t = f"{c['pista']} {c['hora']} (BR {hora_br(c['hora'])})" if c.get("hora") else ""
     extra = f" · {p['classe']} · {int(p['dist'])}m · POST PICK: {p['pp'] or '-'}" if p else \
         f" · {c.get('grade', '')} · {c.get('dist', '')}m"
     return f"### {prefixo}{t} · Race {c.get('num', '')}{extra}"
-
 
 def analisar(c, classe_in, dist_in, pp_in):
     p = preparar(c["id"], c["data"], c, classe_in, dist_in, pp_in)
@@ -328,8 +295,6 @@ def analisar(c, classe_in, dist_in, pp_in):
     if hasattr(dib, "gerar_observacoes"):
         dib.gerar_observacoes(p["rank"], p["s1"], p["ctx"])
 
-
-# ---------------------------------------------------------------- aba Form
 def mostrar_form(c):
     raw = buscar_form_raw(c["id"], c["data"])
     st.markdown(titulo_corrida(c, None, "📄 Form · "))
@@ -362,8 +327,6 @@ def mostrar_form(c):
         else:
             st.caption("Sem corridas anteriores (galgo vacant ou sem histórico).")
 
-
-# ---------------------------------------------------------------- resultados
 def mostrar_resultado(c, classe_in, dist_in, pp_in):
     linhas, tent, primeira = buscar_resultado(c["id"], c["data"])
     st.markdown(titulo_corrida(c, None, "📊 Resultado · "))
@@ -378,7 +341,7 @@ def mostrar_resultado(c, classe_in, dist_in, pp_in):
     tabela_html(["Pos", "Trap", "Galgo", "SP", "Tempo", "Margem", "Comentário"],
                 [[f"{l['pos']}º", badge(l["trap"]), l["nome"], l["sp"], l["tempo"], l["margem"], l["coment"]]
                  for l in linhas])
-    try:   # comparacao: previsto x real
+    try:
         p = preparar(c["id"], c["data"], c, classe_in, dist_in, pp_in, so_antes=True)
         if not p or not p["rank"]:
             return
@@ -407,8 +370,6 @@ def mostrar_resultado(c, classe_in, dist_in, pp_in):
     except Exception as e:
         st.caption(f"Não foi possível comparar com a projeção: {e}")
 
-
-# ---------------------------------------------------------------- tela
 def main():
     st.title("🐾 DIB GREYHOUND")
 
@@ -434,7 +395,7 @@ def main():
             limite = agora_uk().strftime("%H:%M")
             if modo == "ana" and ocultar and hoje:
                 lista = [c for c in lista if c["hora"] >= limite]
-            if modo == "res":   # resultados: so corridas que ja foram disputadas, mais recentes primeiro
+            if modo == "res":
                 if hoje:
                     lista = [c for c in lista if c["hora"] < limite]
                 lista = sorted(lista, key=lambda c: (c["hora"], c["pista"]), reverse=True)
@@ -479,6 +440,5 @@ def main():
             mostrar_form(sel)
         if st.session_state.pop("fechar", False):
             fechar_sidebar()
-
 
 main()
