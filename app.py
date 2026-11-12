@@ -4,6 +4,7 @@ app.py - Lista de corridas / Resultados na barra lateral + analise e Form na pag
 Usa o seu dib_core.py (calculo e tabelas) sem mudancas.
 """
 import re
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -23,15 +24,10 @@ LISTA_CANDIDATOS = [
 ]
 # Enderecos tentados para o resultado de UMA corrida (o primeiro que devolver galgos com posicao vence)
 RESULTADO_CANDIDATOS = (
-    [BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
-     for b in ("result", "results", "resultDetails", "raceResult", "header%2Cresult", "card%2Cresult")]
-    + [BASE + "/result/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
-       for b in ("result", "results", "header%2Cresult")]
-    + [BASE + "/card/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b
-       for b in ("result", "results", "card%2Cresult")]
-    + [BASE + "/results/race.sd?race_id={rid}&r_date={d}",
-       BASE + "/result/race.sd?race_id={rid}&r_date={d}",
-       BASE + "/card/race.sd?race_id={rid}&r_date={d}"]
+    [BASE + "/results/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b for b in ("result", "results", "header%2Cresult")]
+    + [BASE + "/result/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b for b in ("result", "results")]
+    + [BASE + "/card/blocks.sd?race_id={rid}&r_date={d}&blocks=" + b for b in ("result", "results")]
+    + [BASE + "/results/race.sd?race_id={rid}&r_date={d}"]
 )
 KEYS = {
     "id": ["raceId", "race_id", "rid"],
@@ -53,6 +49,38 @@ RES = {   # campos de um galgo no resultado (primeiro que existir)
 EXTRA = {"winsec": ["winnerOrSecond", "winSec", "wnSec", "winnerName", "secondName"],
          "sp": ["SP", "sp", "startingPrice", "price"],
          "trainer": ["trainerName", "trainer", "trainer_name"]}
+
+
+# ---------------------------------------------------------------- conexao com o site (sessao + nova tentativa)
+class _Http:
+    def __init__(self):
+        self.s = requests.Session()
+        self.s.headers.update({
+            "User-Agent": dib.HEADERS.get("User-Agent", "Mozilla/5.0"),
+            "Accept": "application/json, text/plain, */*", "Accept-Language": "en-GB,en;q=0.9",
+            "X-Requested-With": "XMLHttpRequest", "Referer": BASE + "/", "Origin": BASE})
+        self.pronto = False
+
+    def get(self, url, headers=None, timeout=15):
+        if not self.pronto:        # visita a pagina inicial uma vez para receber os cookies, como um navegador
+            try:
+                self.s.get(BASE + "/", timeout=8)
+            except Exception:
+                pass
+            self.pronto = True
+        r = self.s.get(url, timeout=timeout)
+        if r.status_code in (403, 429):
+            time.sleep(1.5)
+            r = self.s.get(url, timeout=timeout)
+        return r
+
+
+@st.cache_resource
+def http():
+    return _Http()
+
+
+dib.requests = http()      # o dib_core passa a usar a mesma sessao
 
 
 # ---------------------------------------------------------------- numeros dos galgos (padrao do site)
@@ -166,8 +194,9 @@ def tentar(urls, parser):
     tentativas, achado, primeira = [], [], None
     for u in urls:
         curto = u.replace(BASE, "")
+        time.sleep(0.3)
         try:
-            r = requests.get(u, headers=dib.HEADERS, timeout=8)
+            r = http().get(u, timeout=8)
             js = r.json() if r.status_code == 200 else None
         except Exception as e:
             tentativas.append({"Endereço": curto, "Status": f"erro: {str(e)[:40]}", "Achados": 0, "Chaves": ""})
@@ -198,8 +227,7 @@ def buscar_resultado(race_id, data_str):
 @st.cache_data(ttl=300, show_spinner=False)
 def buscar_form_raw(race_id, data_str):
     try:
-        r = requests.get(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form",
-                         headers=dib.HEADERS, timeout=15)
+        r = http().get(f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks=form", timeout=15)
         r.raise_for_status()
         return r.json().get("form", {}).get("dogs", [])
     except Exception:
@@ -288,9 +316,8 @@ def analisar(c, classe_in, dist_in, pp_in):
     st.markdown(titulo_corrida(c, p))
     st.markdown("#### Planilha de Projeção")
     st.markdown(dib.tabela_projecao(p["ds"]), unsafe_allow_html=True)
-    st.markdown("**Classificação:** " + " > ".join(
-        f"{dib.MEDALS.get(d['pos'], str(d['pos']) + 'º')} {badge(d['trap'])}" for d in p["rank"]),
-        unsafe_allow_html=True)
+    st.markdown("&nbsp; ".join(badge(d["trap"]) for d in p["rank"]), unsafe_allow_html=True)
+    st.markdown(titulo_corrida(c, p))
     dib.tabela_avb(p["s1"], "1ª Planilha — AVB Principal (Prob ≥ 60%)")
     if hasattr(dib, "gerar_observacoes"):
         dib.gerar_observacoes(p["rank"], p["s1"], p["ctx"])
@@ -391,6 +418,18 @@ def main():
             pp_in = st.text_input("Post Pick (ex: 1-2-3)", value="")
             url_custom = st.text_input("Endereço da lista (use {data})", value="")
         corridas, tentativas, primeira = buscar_lista(data_str, url_custom)
+        memoria = st.session_state.setdefault("lista_ok", {})
+        if corridas:
+            memoria[data_str] = corridas
+        elif data_str in memoria:
+            corridas = memoria[data_str]
+            st.caption("⚠️ Usando a última lista carregada (o site não respondeu agora).")
+        if not corridas and any(t.get("Status") == 403 for t in tentativas):
+            st.error("O site recusou o acesso (403). Costuma ser bloqueio temporário por muitas consultas "
+                     "ou data ainda indisponível. Espere alguns minutos, escolha o dia anterior ou toque em Tentar de novo.")
+        if not corridas and st.button("🔄 Tentar de novo"):
+            buscar_lista.clear()
+            st.rerun()
 
         sel = st.session_state.get("sel")
         if corridas:
