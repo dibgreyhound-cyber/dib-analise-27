@@ -180,17 +180,41 @@ def titulo_corrida(c,p=None,prefixo=""):
 # Predictor estilo Racing Post, barras por score Overall
 
 def grafico_predictor(ds):
- cores={1:"#d62828",2:"#1d4ed8",3:"#f4f4f4",4:"#111111",5:"#f97316",6:"#f4f4f4"};dogs=sorted(ds,key=lambda d:int(d.get("trap",99)));vals=[float(d.get("overall") or 0) for d in dogs if not d.get("nd")];lo=min(vals,default=0);hi=max(vals,default=1)
+ """Predictor renderizado em iframe próprio (evita o Streamlit ocultar o HTML/CSS)."""
+ cores={1:"#d62828",2:"#1d4ed8",3:"#f4f4f4",4:"#111111",5:"#f97316",6:"#f4f4f4"}
+ dogs=sorted(ds,key=lambda d:int(d.get("trap",99)))
+ valores=[float(d.get("overall") or 0) for d in dogs if not d.get("nd")]
+ lo=min(valores,default=0);hi=max(valores,default=1)
  if hi<=lo:hi=lo+1
- css="""<style>.pred-wrap{background:#597f9c;border:1px solid #7b9ab3;border-radius:22px;padding:12px 14px;font-family:Arial;color:white}.pred-head{display:inline-block;background:#c52b25;padding:8px 24px;border-radius:18px 18px 0 0;font-weight:700;font-size:18px}.pred-row{display:flex;align-items:center;gap:8px;height:48px;margin:6px 0}.pred-num{width:40px;min-width:40px;height:40px;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;border-radius:6px;box-sizing:border-box}.pred-lane{height:40px;flex:1;min-width:0;background:#073c61;border-radius:24px;overflow:hidden}.pred-bar{height:100%;border-radius:24px;display:flex;align-items:center;justify-content:flex-end;padding-right:4px;box-sizing:border-box}.pred-dog{width:34px;height:25px;flex-shrink:0}.pred-dog svg{width:100%;height:100%;display:block}</style>""";out=css+"<div class='pred-wrap'><div class='pred-head'>Predictor</div>"
- svg="<svg viewBox='0 0 100 55' xmlns='http://www.w3.org/2000/svg'><g fill='#eaf2f7'><path d='M5 27 18 17 43 20 58 13 75 16 91 10 97 16 84 25 69 26 59 34 56 49 50 49 51 32 38 32 27 46 21 46 27 29 15 31Z'/><path d='M18 19 8 7 4 10 13 24Z'/><path d='M72 17 80 5 85 7 79 22Z'/></g></svg>"
+ svg="""<svg viewBox="0 0 100 55" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+ <g fill="#eaf2f7"><path d="M5 27 18 17 43 20 58 13 75 16 91 10 97 16 84 25 69 26 59 34 56 49 50 49 51 32 38 32 27 46 21 46 27 29 15 31Z"/>
+ <path d="M18 19 8 7 4 10 13 24Z"/><path d="M72 17 80 5 85 7 79 22Z"/></g></svg>"""
+ rows=[]
  for d in dogs:
   trap=int(d.get("trap",0) or 0)
   if not 1<=trap<=6:continue
-  val=float(d.get("overall") or 0);empty=bool(d.get("nd"));w=(12+88*((val-lo)/(hi-lo))) if not empty else 0;bg=cores[trap]
-  badgebg="repeating-linear-gradient(0deg,#111 0 5px,#fff 5px 10px)" if trap==6 else bg;color="#111" if trap==3 else "#e11" if trap==6 else "#fff";border="1px solid #111" if trap in (3,4,6) else "none"
-  out+=f"<div class='pred-row'><div class='pred-num' style='background:{badgebg};color:{color};border:{border}'>{trap}</div><div class='pred-lane'><div class='pred-bar' style='width:{w:.1f}%;background:{bg}'><div class='pred-dog'>{svg}</div></div></div></div>"
- out+="</div>";st.markdown(out,unsafe_allow_html=True)
+  empty=bool(d.get("nd"));val=float(d.get("overall") or 0)
+  width=max(8,min(100,12+88*((val-lo)/(hi-lo)))) if not empty else 0
+  bg=cores[trap]
+  badge_bg=("repeating-linear-gradient(90deg,#111 0 5px,#fff 5px 10px)" if trap==6 else bg)
+  color="#111" if trap in (3,4) else ("#e11" if trap==6 else "#fff")
+  border="1px solid #111" if trap in (3,4,6) else "none"
+  rows.append(f"""<div class="row">
+   <div class="trap" style="background:{badge_bg};color:{color};border:{border}">{trap}</div>
+   <div class="lane"><div class="bar" style="width:{width:.1f}%;background:{bg}">
+    <span class="dog">{svg}</span></div></div></div>""")
+ html_doc=f"""<!doctype html><html><head><meta charset="utf-8">
+ <style>
+ *{{box-sizing:border-box}}body{{margin:0;background:transparent;font-family:Arial,sans-serif}}
+ .wrap{{background:#597f9c;border:1px solid #7b9ab3;border-radius:20px;padding:10px 14px;color:#fff}}
+ .head{{display:inline-block;background:#c52b25;padding:7px 22px;border-radius:15px 15px 0 0;font-weight:700;font-size:18px}}
+ .row{{display:flex;align-items:center;gap:8px;height:47px;margin:5px 0}}
+ .trap{{width:39px;min-width:39px;height:39px;display:flex;align-items:center;justify-content:center;font-size:25px;font-weight:800;border-radius:5px}}
+ .lane{{height:39px;flex:1;min-width:0;background:#073c61;border-radius:24px;overflow:hidden}}
+ .bar{{height:100%;min-width:0;border-radius:24px;display:flex;align-items:center;justify-content:flex-end;padding-right:3px}}
+ .dog{{width:34px;height:25px;flex-shrink:0;display:block}}.dog svg{{width:100%;height:100%;display:block}}
+ </style></head><body><div class="wrap"><div class="head">Predictor</div>{''.join(rows)}</div></body></html>"""
+ components.html(html_doc,height=360,scrolling=False)
 
 def gerar_texto_analise(c,p):
  txt=[titulo_corrida(c,p).replace("### ",""),"","**Planilha de Projeção**","| Trp | Galgo | Overall | Cat | Fatores | Perfil | Grades | Peso | Dias | Split | Time | Méd. Split | Méd. Time | Time Ajust. | Ritmo | Recup. Média | Conf. |","|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
