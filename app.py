@@ -15,6 +15,44 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="DIB GREYHOUND", layout="wide", initial_sidebar_state="auto")
+
+# --- BLOCO PARA O GALGO CORRENDO NO STATUS DO STREAMLIT ---
+st.markdown(
+    """
+    <style>
+    /* 1. Força a esconder qualquer ícone de esporte original */
+    [data-testid="stStatusWidget"] svg {
+        display: none !important;
+    }
+
+    /* 2. Adiciona o Galgo no lugar */
+    [data-testid="stStatusWidget"] > div::before {
+        content: "";
+        display: inline-block;
+        width: 32px;
+        height: 32px;
+        /* Silhueta de Galgo em SVG na cor cinza escuro (#31333F) */
+        background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 42"><g fill="%2331333F" stroke="%2331333F" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="0.4" d="M24 13 C32 9.6 44 8.8 54 8.6 C62 8.4 68 7.2 74 6 C78 5 81 4.2 84 3.8 C87 3.4 89 4 91 5 L99 9 C100.4 9.8 100.4 11 99 11.6 L94 12.4 C91 12.6 89.4 11.4 87 11.2 C83 11.6 80 13 78.4 15.6 C77.4 19.2 75 22.6 70 22.6 C65 22.6 60 20 55 18.4 C50 16.8 44 15.8 38 16 C32 16 27 16.6 24 14.8 Z"/><path stroke-width="0.3" d="M85.4 3.8 L86.4 0.6 L88.8 3.4 Z"/><path fill="none" stroke-width="2.6" d="M77 15.4 L88 18"/><path fill="none" stroke-width="1.6" d="M88 18 L98 18.6"/><path fill="none" stroke-width="2.4" d="M76 17 L85 21.6"/><path fill="none" stroke-width="1.6" d="M85 21.6 L94 22.4"/><path fill="none" stroke-width="5" d="M29 13.6 L19 19.4"/><path fill="none" stroke-width="2.4" d="M19 19.4 L10 24.6"/><path fill="none" stroke-width="1.7" d="M10 24.6 L4 26.4"/><path fill="none" stroke-width="3.8" d="M30 15.6 L23 24"/><path fill="none" stroke-width="2.2" d="M23 24 L15 30.4"/><path fill="none" stroke-width="1.7" d="M15 30.4 L8.4 32.6"/><path fill="none" stroke-width="1.2" d="M24 12.6 C18 14.2 12 15 5 13.4"/></g></svg>');
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+        margin-right: 8px;
+        vertical-align: middle;
+        
+        /* Animação do galgo correndo */
+        animation: runDog 0.4s infinite alternate;
+    }
+
+    @keyframes runDog {
+        from { transform: translateX(-3px); }
+        to { transform: translateX(3px); }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+# --- FIM DO BLOCO DO GALGO ---
+
 import dib_core as dib
 
 BASE = "https://greyhoundbet.racingpost.com"
@@ -118,7 +156,7 @@ dib.trap_label = lambda d: badge(d["trap"])
 def botao_copiar(texto):
     """Cria um botão HTML nativo que copia o texto usando JavaScript."""
     texto_js = json.dumps(texto)
-    
+
     html = f"""
     <html>
     <head>
@@ -280,9 +318,11 @@ def buscar_form_raw(race_id, data_str):
 
 
 # ---------------------------------------------------------------- utilidades
-def hora_br(hhmm):
+def hora_br(hhmm, h24=False):
     h, m = [int(x) for x in hhmm.split(":")]
     t = datetime(2000, 1, 1, h, m) - timedelta(hours=3)
+    if h24:
+        return f"{t.hour:02d}:{t.minute:02d}"
     return f"{t.hour % 12 or 12}:{t.minute:02d}"
 
 
@@ -340,7 +380,7 @@ def mostrar_replay(c):
     else:
         st.caption("▶ Replay: esta corrida ainda não trouxe o código do vídeo (clipId vazio na lista). "
                    "Ele costuma aparecer depois que a corrida termina; toque em 🔄 para recarregar a lista.")
-    _link(f"{BASE}/#results-list/r_date={c['data']}", "Abrir os resultados no site (botão Watch Replay)")
+    _link(f"{BASE}/#card/race_id={c['id']}&r_date={c['data']}", "Abrir esta corrida no site")
 
 
 # ---------------------------------------------------------------- descobrir enderecos (lendo o JavaScript do site)
@@ -390,66 +430,76 @@ def _galgos_com_posicao(js):
     return n
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def varrer_site():
+    """Le a pagina inicial e os arquivos JavaScript do site (so na primeira vez)."""
+    html = _baixar(BASE + "/")
+    scripts = []
+    for u in re.findall(r"""<script[^>]+src=["']([^"']+)["']""", html):
+        u = "https:" + u if u.startswith("//") else (BASE + u if u.startswith("/") else
+                                                      (u if u.startswith("http") else BASE + "/" + u))
+        if "racingpost" in u and u not in scripts:
+            scripts.append(u)
+    scripts = scripts[:8]
+    tudo = "\n".join(_baixar(u) for u in scripts)
+    return {
+        "html": len(html), "scripts": [u.replace(BASE, "") for u in scripts], "chars": len(tudo),
+        "caminhos": sorted({m.group(1) for m in _RE_SD.finditer(tudo)})[:120],
+        "blocos": sorted({m.group(1) for m in _RE_BLOCKS.finditer(tudo)})[:120],
+        "rotas": _contextos(tudo, r"(results?|meeting|card)[-_](list|details?|meeting)|#result", 80, 25),
+        "result": _contextos(tudo, r"result", 70, 25),
+        "replay": _contextos(tudo, r"replay|clipId|youtube|\.mp4|m3u8|video", 80, 25),
+    }
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def testar_enderecos(race_id, data_str, bases, nomes):
+    testes, achado = [], None
+    for p in bases:
+        for b in nomes:
+            u = f"{BASE}{p}?race_id={race_id}&r_date={data_str}&blocks={b}"
+            time.sleep(0.25)
+            try:
+                r = http().get(u, timeout=8)
+                js = r.json() if r.status_code == 200 else None
+            except Exception:
+                testes.append({"Status": "não é JSON", "Galgos": 0, "Chaves": "", "Endereço": u.replace(BASE, "")})
+                continue
+            n = _galgos_com_posicao(js) if js is not None else 0
+            testes.append({"Status": r.status_code, "Galgos": n, "Chaves": _chaves(js) if js is not None else "",
+                           "Endereço": u.replace(BASE, "")})
+            if n >= 2 and not achado:
+                achado = u
+    return testes, achado
+
+
 def painel_descobrir(race_id, data_str):
     st.markdown("---")
-    st.markdown("#### 🧪 Descobrir o endereço do resultado e do replay")
-    st.caption("Lê o código do site para achar de onde vêm o resultado e o vídeo. Leva alguns segundos.")
-    if not st.button("🧪 Descobrir agora", key="btn_descobrir"):
-        return
-    with st.spinner("Lendo o site..."):
-        html = _baixar(BASE + "/")
-        urls = re.findall(r"""<script[^>]+src=["']([^"']+)["']""", html)
-        scripts = []
-        for u in urls:
-            u = "https:" + u if u.startswith("//") else (BASE + u if u.startswith("/") else
-                                                          (u if u.startswith("http") else BASE + "/" + u))
-            if "racingpost" in u and u not in scripts:
-                scripts.append(u)
-        scripts = scripts[:8]
-        tudo = "\n".join(_baixar(u) for u in scripts)
-        st.write(f"Página inicial: {len(html)} caracteres · {len(scripts)} arquivos JavaScript · "
-                 f"{len(tudo)} caracteres lidos")
-
-        caminhos = sorted({m.group(1) for m in _RE_SD.finditer(tudo)})
-        blocos = sorted({m.group(1) for m in _RE_BLOCKS.finditer(tudo)})
-        st.markdown("**Endereços .sd encontrados no site:**")
-        st.code("\n".join(caminhos[:80]) or "(nenhum)")
-        st.markdown("**Nomes de blocks encontrados:**")
-        st.code(", ".join(blocos[:80]) or "(nenhum)")
-        st.markdown("**Trechos do código com 'result':**")
-        st.code("\n\n".join(_contextos(tudo, r"result", 70, 15)) or "(nenhum)")
-        st.markdown("**Trechos do código sobre replay / vídeo:**")
-        st.code("\n\n".join(_contextos(tudo, r"replay|clipId|youtube|\.mp4|m3u8|video", 80, 20)) or "(nenhum)")
-
-        caminhos_res = [p for p in caminhos if "result" in p.lower()]
-        bases = caminhos_res[:6] + ["/results/blocks.sd", "/result/blocks.sd", "/card/blocks.sd"]
-        nomes = [b for b in blocos if "result" in b.lower()] + ["result", "results", "card", "header%2Ccard"]
-        testes, achado, vistos = [], None, set()
-        for p in bases:
-            p = p if p.startswith("/") else "/" + p
-            for b in list(dict.fromkeys(nomes))[:6]:
-                u = f"{BASE}{p}?race_id={race_id}&r_date={data_str}&blocks={b}"
-                if u in vistos or len(testes) >= 30:
-                    continue
-                vistos.add(u)
-                time.sleep(0.25)
-                try:
-                    r = http().get(u, timeout=8)
-                    js = r.json() if r.status_code == 200 else None
-                except Exception:
-                    testes.append({"Status": "não é JSON", "Galgos": 0, "Endereço": u.replace(BASE, "")})
-                    continue
-                n = _galgos_com_posicao(js) if js is not None else 0
-                testes.append({"Status": r.status_code, "Galgos": n, "Endereço": u.replace(BASE, "")})
-                if n >= 2 and not achado:
-                    achado = u
-        st.markdown("**Testes de endereço do resultado:**")
-        st.dataframe(pd.DataFrame(testes), use_container_width=True, hide_index=True)
-        if achado:
-            st.success("Achei um endereço com resultado! Me mande a foto desta tela.")
-            st.code(achado)
-        else:
-            st.warning("Ainda não achei. Me mande as fotos das listas acima.")
+    st.markdown("#### 🧪 Procurando o endereço do resultado e do replay")
+    with st.spinner("Lendo o código do site (só na primeira vez, leva alguns segundos)..."):
+        v = varrer_site()
+    caminhos_res = [p for p in v["caminhos"] if "result" in p.lower()]
+    bases = tuple(dict.fromkeys([(p if p.startswith("/") else "/" + p) for p in caminhos_res[:5]]
+                                + ["/results/blocks.sd", "/card/blocks.sd"]))
+    nomes = tuple(dict.fromkeys([b for b in v["blocos"] if "result" in b.lower()][:6]
+                                + ["result", "results", "resultDetails", "card%2Cresult"]))[:8]
+    with st.spinner("Testando endereços..."):
+        testes, achado = testar_enderecos(race_id, data_str, bases, nomes)
+    if achado:
+        st.success("Achei um endereço com resultado! Copie o relatório abaixo e cole no chat.")
+        st.code(achado)
+    else:
+        st.warning("Ainda não achei o endereço. Toque em copiar e cole o relatório no chat que eu ajusto.")
+    linhas = [f"Pagina inicial: {v['html']} caracteres | JavaScript: {len(v['scripts'])} arquivos, {v['chars']} caracteres",
+              "ARQUIVOS: " + ", ".join(v["scripts"]),
+              "ENDERECOS .sd: " + ", ".join(v["caminhos"]),
+              "BLOCKS: " + ", ".join(v["blocos"]),
+              "ROTAS:", *v["rotas"], "RESULT:", *v["result"], "REPLAY/VIDEO:", *v["replay"],
+              "TESTES:", *[f"{t['Status']} | galgos={t['Galgos']} | {t['Chaves']} | {t['Endereço']}" for t in testes]]
+    relatorio = "\n".join(linhas)
+    botao_copiar(relatorio)
+    st.text_area("Relatório (se o botão não copiar, selecione e copie daqui):", relatorio, height=220)
+    st.dataframe(pd.DataFrame(testes), use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------- grafico estilo "Predictor" (barras pelo Overall)
@@ -459,12 +509,58 @@ BAR_STYLE = {
     3: ("background:#eeeeee;", "dark"),
     4: ("background:#151515;", "invert"),
     5: ("background:#f26b21;", "invert"),
-    6: ("background:repeating-linear-gradient(180deg,#111 0 3px,#fff 3px 6px);", "invert"),
+    6: ("background:repeating-linear-gradient(180deg,#111 0 3px,#fff 3px 6px);", "stripe"),
 }
 
 
+def greyhound_svg(trap):
+    """Silhueta de greyhound em galope estendido (de lado, olhando p/ a direita).
+    Branca; preta na barra 3 (fundo claro); com contorno escuro na barra 6 (listrada)."""
+    cor = "#111" if trap == 3 else "#fff"
+    if trap == 6:
+        sh = "filter:drop-shadow(0 0 .6px #000) drop-shadow(0 0 .6px #000) drop-shadow(0 0 .6px #000);"
+    elif trap == 3:
+        sh = ""
+    else:
+        sh = "filter:drop-shadow(0 0 .7px rgba(0,0,0,.8));"
+    return (
+        f"<svg viewBox='0 0 104 42' width='28' height='11' xmlns='http://www.w3.org/2000/svg' "
+        f"style='display:block;{sh}'>"
+        f"<g fill='{cor}' stroke='{cor}' stroke-linecap='round' stroke-linejoin='round'>"
+        # tronco, pescoço fino e cabeça comprida
+        "<path stroke-width='0.4' d='M24 13 C32 9.6 44 8.8 54 8.6 C62 8.4 68 7.2 74 6 C78 5 81 4.2 84 3.8 "
+        "C87 3.4 89 4 91 5 L99 9 C100.4 9.8 100.4 11 99 11.6 L94 12.4 C91 12.6 89.4 11.4 87 11.2 "
+        "C83 11.6 80 13 78.4 15.6 C77.4 19.2 75 22.6 70 22.6 C65 22.6 60 20 55 18.4 C50 16.8 44 15.8 38 16 "
+        "C32 16 27 16.6 24 14.8 Z'/>"
+        # orelha
+        "<path stroke-width='0.3' d='M85.4 3.8 L86.4 0.6 L88.8 3.4 Z'/>"
+        # patas dianteiras esticadas para a frente
+        "<path fill='none' stroke-width='2.6' d='M77 15.4 L88 18'/>"
+        "<path fill='none' stroke-width='1.6' d='M88 18 L98 18.6'/>"
+        "<path fill='none' stroke-width='2.4' d='M76 17 L85 21.6'/>"
+        "<path fill='none' stroke-width='1.6' d='M85 21.6 L94 22.4'/>"
+        # patas traseiras esticadas para trás
+        "<path fill='none' stroke-width='5' d='M29 13.6 L19 19.4'/>"
+        "<path fill='none' stroke-width='2.4' d='M19 19.4 L10 24.6'/>"
+        "<path fill='none' stroke-width='1.7' d='M10 24.6 L4 26.4'/>"
+        "<path fill='none' stroke-width='3.8' d='M30 15.6 L23 24'/>"
+        "<path fill='none' stroke-width='2.2' d='M23 24 L15 30.4'/>"
+        "<path fill='none' stroke-width='1.7' d='M15 30.4 L8.4 32.6'/>"
+        # rabo fino
+        "<path fill='none' stroke-width='1.2' d='M24 12.6 C18 14.2 12 15 5 13.4'/>"
+        "</g></svg>"
+    )
+
+
+def badge_p(t):
+    """Número da trap em tamanho reduzido (só para o gráfico)."""
+    return (badge(t).replace("min-width:24px;height:24px;line-height:24px", "min-width:16px;height:16px;line-height:16px")
+            .replace("font-size:14px", "font-size:11px"))
+
+
 def grafico_predictor(ds):
-    """Uma barra por galgo (na ordem das traps). Tamanho = Overall / maior Overall; o maior Overall enche a barra."""
+    """Uma barra por galgo (na ordem das traps). Tamanho = Overall / maior Overall; o maior Overall enche a barra.
+    No fim de cada barra vai o galgo correndo, com a casaca da respectiva trap."""
     com = [d for d in ds if not d.get("nd") and d.get("overall") is not None]
     if not com:
         return ""
@@ -472,25 +568,171 @@ def grafico_predictor(ds):
     linhas = []
     for d in sorted(ds, key=lambda x: x["trap"]):
         t = d["trap"]
-        estilo, icone = BAR_STYLE.get(t, ("background:#888;", "invert"))
+        estilo, _ = BAR_STYLE.get(t, ("background:#888;", "invert"))
         if d.get("nd") or d.get("overall") is None:
-            fill, tip = "", "sem dados"
+            fill = ""
         else:
-            w = 100.0 if mx <= 0 else max(4.0, min(100.0, d["overall"] / mx * 100.0))
+            w = 100.0 if mx <= 0 else max(11.0, min(100.0, d["overall"] / mx * 100.0))
             tip = f"{d['name']} · Overall {d['overall']:.1f}"
-            filtro = "brightness(0)" if icone == "dark" else "brightness(0) invert(1)"
             fill = (f"<div title=\"{tip}\" style='position:relative;width:{w:.1f}%;height:100%;"
-                    f"border-radius:14px;{estilo}'>"
-                    f"<span style='position:absolute;right:6px;top:50%;transform:translateY(-50%);"
-                    f"font-size:15px;line-height:1;filter:{filtro};'>🐕</span></div>")
-        linhas.append(f"<div style='display:flex;align-items:center;gap:8px;margin:7px 0'>{badge(t)}"
-                      f"<div style='flex:1;height:24px;background:#0a2a52;border-radius:14px;overflow:hidden'>"
+                    f"border-radius:8px;{estilo}'>"
+                    f"<span style='position:absolute;right:4px;top:50%;transform:translateY(-50%);"
+                    f"line-height:0;'>{greyhound_svg(t)}</span></div>")
+        linhas.append(f"<div style='display:flex;align-items:center;gap:6px;margin:4px 0'>{badge_p(t)}"
+                      f"<div style='flex:1;height:15px;background:#0a2a52;border-radius:8px;overflow:hidden'>"
                       f"{fill}</div></div>")
-    return ("<div style='background:#143f6f;border-radius:16px;padding:16px 12px 8px;max-width:640px;margin:8px 0;"
+    return ("<div style='background:#143f6f;border-radius:16px;padding:12px 10px 5px;max-width:640px;margin:6px 0;"
             "position:relative'>"
             "<div style='position:absolute;top:-1px;left:10px;background:#d32f2f;color:#fff;font-weight:700;"
-            "font-size:13px;padding:3px 14px;border-radius:0 0 12px 12px'>Predictor</div>"
-            "<div style='height:10px'></div>" + "".join(linhas) + "</div>")
+            "font-size:11px;padding:2px 12px;border-radius:0 0 10px 10px'>Predictor</div>"
+            "<div style='height:6px'></div>" + "".join(linhas) + "</div>")
+
+
+# ---------------------------------------------------------------- post pick (galgos indicados pelo Racing Post)
+_RE_PP_TXT = re.compile(r"post\s*pick\s*[:\-]?\s*((?:[1-6]\s*[-,/]\s*)*[1-6])(?!\d)", re.I)
+_RE_SEQ = re.compile(r"[1-6](?:\s*[-,/]\s*[1-6]){1,5}")
+_TRAP_KEYS = ("trapNum", "trap", "dogTrap")
+
+
+def _nums_pp(v):
+    """Extrai numeros de trap (1-6) de um valor: '1-2-5', [1,2,5], [{'trapNum': 1}, ...]."""
+    if isinstance(v, bool):
+        return []
+    if isinstance(v, int):
+        return [v] if 1 <= v <= 6 else []
+    if isinstance(v, str):
+        if re.fullmatch(r"[\s1-6,\-/]+", v):
+            return [int(x) for x in re.findall(r"[1-6]", v)]
+        m = _RE_PP_TXT.search(v)
+        return [int(x) for x in re.findall(r"[1-6]", m.group(1))] if m else []
+    if isinstance(v, dict):
+        for k in _TRAP_KEYS:
+            if k in v:
+                return _nums_pp(v[k])
+        return [n for x in v.values() for n in _nums_pp(x)]
+    if isinstance(v, list):
+        return [n for x in v for n in _nums_pp(x)]
+    return []
+
+
+def extrair_post_pick(obj):
+    """Procura o Post Pick em qualquer lugar do JSON, em ordem de confianca:
+    1) chave 'postPick'/'post_pick'; 2) texto 'POST PICK: 1-2-5'; 3) chave com 'pick';
+    4) chave com 'tip' cujo valor e uma sequencia de traps (ex.: '1-2-5')."""
+    n1, n2, n3, n4 = [], [], [], []
+
+    def walk(o, caminho):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                nk = re.sub(r"[^a-z]", "", str(k).lower())
+                if "postpick" in nk:
+                    n = _nums_pp(v)
+                    if n: n1.append((n, f"{caminho}/{k}"))
+                elif "pick" in nk:
+                    n = _nums_pp(v)
+                    if n: n3.append((n, f"{caminho}/{k}"))
+                elif "tip" in nk and isinstance(v, (str, list)):
+                    if isinstance(v, str) and _RE_SEQ.fullmatch(v.strip()):
+                        n4.append((_nums_pp(v), f"{caminho}/{k}"))
+                walk(v, f"{caminho}/{k}")
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                walk(v, f"{caminho}[{i}]")
+        elif isinstance(o, str):
+            m = _RE_PP_TXT.search(o)
+            if m:
+                n2.append(([int(x) for x in re.findall(r"[1-6]", m.group(1))], caminho + " (texto)"))
+
+    walk(obj, "")
+    for grupo in (n1, n2, n3, n4):
+        for n, onde in grupo:
+            n = list(dict.fromkeys(n))[:6]
+            if n:
+                return n, onde
+    return [], ""
+
+
+def pistas_post_pick(obj, limite=15):
+    """Lista (caminho = valor) das chaves/textos que parecem ligados a post pick/tips, para diagnostico."""
+    res = []
+
+    def walk(o, caminho):
+        if len(res) >= limite:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                nk = re.sub(r"[^a-z]", "", str(k).lower())
+                if any(x in nk for x in ("pick", "tip", "verdict", "forecast")) and not isinstance(v, (dict, list)):
+                    res.append(f"{caminho}/{k} = {str(v)[:60]}")
+                elif "pick" in nk:
+                    res.append(f"{caminho}/{k} = {str(v)[:60]}")
+                walk(v, f"{caminho}/{k}")
+        elif isinstance(o, list):
+            for i, v in enumerate(o[:12]):
+                walk(v, f"{caminho}[{i}]")
+        elif isinstance(o, str) and re.search(r"post\s*pick", o, re.I):
+            res.append(f"{caminho} = {o[:60]}")
+
+    walk(obj, "")
+    return res[:limite]
+
+
+def _corrida_no_json(obj, race_id):
+    """Dentro do JSON da lista de corridas, devolve o trecho (dict) da corrida pedida."""
+    achado = []
+
+    def walk(o):
+        if achado:
+            return
+        if isinstance(o, dict):
+            if str(o.get("raceId", o.get("race_id", ""))) == str(race_id):
+                achado.append(o)
+                return
+            for v in o.values(): walk(v)
+        elif isinstance(o, list):
+            for v in o: walk(v)
+
+    walk(obj)
+    return achado[0] if achado else None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def buscar_post_pick(race_id, data_str):
+    """Tenta varias respostas do site ate achar o Post Pick. Devolve ('1-2-5', diagnostico)."""
+    diag = []
+    urls = [f"{BASE}/card/blocks.sd?race_id={race_id}&r_date={data_str}&blocks={b}"
+            for b in ("card", "header%2Ccard", "card-header", "card-title",
+                      "card-pager%2Ccard-header%2Ccard-tabs%2Ccard-title%2Ccard", "form")]
+    urls.append(f"{BASE}/meeting/blocks.sd?r_date={data_str}&blocks=header%2Clist")
+    urls.append(f"{BASE}/meeting/blocks.sd?r_date={data_str}&blocks=list")
+    for u in urls:
+        curto = u.replace(BASE, "")
+        time.sleep(0.2)
+        try:
+            r = http().get(u, timeout=8)
+            js = r.json() if r.status_code == 200 else None
+        except Exception as e:
+            diag.append({"Status": f"erro: {str(e)[:30]}", "Achado": "", "Chaves": "", "Pistas": [],
+                         "Endereço": curto})
+            continue
+        alvo = js
+        if js is not None and "/meeting/" in u:      # lista do dia: olhar so a corrida pedida
+            alvo = _corrida_no_json(js, race_id)
+        nums, onde = extrair_post_pick(alvo) if alvo is not None else ([], "")
+        diag.append({"Status": r.status_code,
+                     "Achado": f"{'-'.join(map(str, nums))} em {onde}" if nums else "",
+                     "Chaves": _chaves(js) if js is not None else "",
+                     "Pistas": pistas_post_pick(alvo) if alvo is not None else [],
+                     "Endereço": curto})
+        if nums:
+            return "-".join(map(str, nums)), diag
+    return "", diag
+
+
+def _fmt_pp(pp):
+    """Padroniza para '1-2-5' (aceita '1,2,5', '1 2 5', '125'...)."""
+    n = re.findall(r"[1-6]", str(pp or ""))
+    return "-".join(dict.fromkeys(n)) if n else ""
 
 
 # ---------------------------------------------------------------- analise
@@ -510,7 +752,9 @@ def preparar(race_id, r_date, c, classe_in, dist_in, pp_in, so_antes=False):
     if not dist:
         ds_all = [r["dist"] for d in dogs for r in d["runs"] if r["dist"]]
         dist = float(pd.Series(ds_all).mode().iloc[0]) if ds_all else 480.0
-    pp = pp_in or (meta_info or {}).get("post_pick", "")
+    pp = _fmt_pp(pp_in) or _fmt_pp((meta_info or {}).get("post_pick", ""))
+    if not pp:
+        pp = _fmt_pp(buscar_post_pick(race_id, r_date)[0])
     ctx = {"dist": dist, "today": dib.parse_date(meta["r_date"]), "classe_n": dib.grade_num(classe),
            "post_pick": [int(x) for x in re.findall(r"\d", pp)],
            "vazias": [t for t in range(1, 7) if t not in {d["trap"] for d in dogs if d["name"] != "vacant"}]}
@@ -523,8 +767,8 @@ def preparar(race_id, r_date, c, classe_in, dist_in, pp_in, so_antes=False):
 
 
 def titulo_corrida(c, p=None, prefixo=""):
-    t = f"{c['pista']} {c['hora']} (BR {hora_br(c['hora'])})" if c.get("hora") else ""
-    extra = f" · {p['classe']} · {int(p['dist'])}m · POST PICK: {p['pp'] or '-'}" if p else \
+    t = f"{c['pista']} {c['hora']} (BR {hora_br(c['hora'], True)})" if c.get("hora") else ""
+    extra = f" · {p['classe']} · {int(p['dist'])}m · Post Pick: {p['pp'] or '-'}" if p else \
         f" · {c.get('grade', '')} · {c.get('dist', '')}m"
     return f"### {prefixo}{t} · Race {c.get('num', '')}{extra}"
 
@@ -534,20 +778,20 @@ def gerar_texto_analise(c, p):
     txt = []
     txt.append(titulo_corrida(c, p).replace("### ", ""))
     txt.append("")
-    
+
     txt.append("**Planilha de Projeção**")
     txt.append("| Trp | Galgo | Overall | Cat | Fatores | Perfil | Grades | Peso | Dias | Split | Time | Méd. Split | Méd. Time | Time Ajust. | Ritmo | Recup. Média | Conf. |")
     txt.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-    
+
     for d in p["ds"]:
         if d["nd"]:
             txt.append(f"| {d['trap']} | {d['name']} | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - |")
             continue
-        
+
         nome = f"{d['name']} {'🚫' if d.get('bloqueado') else ''} {'🎯' if d.get('alvo') else ''}".strip()
         fat = "<br>".join(f"{k} ({v:+.1f})" for k, v in d["fatores"]) or "-"
         grades = "-".join((r["grade"] or "?") for r in d["runs"])
-        
+
         f_split = f"{d['split']:.2f}" if d.get("split") else "-"
         f_time = f"{d['time']:.2f}" if d.get("time") else "-"
         f_msplit = f"{d['msplit']:.2f}" if d.get("msplit") else (f"Pos:{d['msplit_pos']:.1f}" if d.get("msplit_pos") else "-")
@@ -556,15 +800,15 @@ def gerar_texto_analise(c, p):
         f_ritmo = f"{d['ritmo']:.2f}" if d.get("ritmo") else "-"
         f_rec = f"{d['rec']:+.2f}%" if d.get("rec") is not None else "-"
         f_peso = f"{d['peso']:.1f}" if d.get("peso") else "-"
-        
+
         txt.append(f"| {d['trap']} | {nome} | {d['overall']:.1f} | {d['cat']:.1f} | {fat} | {d['perfil']} | {grades} | {f_peso} | {d['dias']} | {f_split} | {f_time} | {f_msplit} | {f_mtime} | {f_tadj} | {f_ritmo} | {f_rec} | {d['conf']:.0f}% |")
-    
+
     txt.append("")
-    
+
     classif = " > ".join(f"{d['pos']}º [T{d['trap']}]" for d in p["rank"])
     txt.append(f"**Classificação:** {classif}")
     txt.append("")
-    
+
     txt.append("**AVBs Principais (≥ 60%)**")
     if not p["s1"]:
         txt.append("Nenhum confronto atingiu 60%.")
@@ -573,11 +817,11 @@ def gerar_texto_analise(c, p):
         txt.append("|---|---|---|")
         for (V, D, prob, star) in p["s1"]:
             txt.append(f"| {V['trap']} - {V['name']} | {D['trap']} - {D['name']} | {prob:.1f}% |")
-    
+
     txt.append("")
-    
+
     txt.append("**🏁 O Cenário da Corrida:**")
-    
+
     elegiveis = [d for d in p["rank"] if not d.get("bloqueado")]
     bloqueados = [d for d in p["rank"] if d.get("bloqueado")]
     alvos = [d for d in p["rank"] if d.get("alvo")]
@@ -648,25 +892,163 @@ def gerar_texto_analise(c, p):
     return "\n".join(txt)
 
 
+def badge_g(t):
+    """Número da trap em tamanho maior (cabeçalho da corrida)."""
+    return (badge(t).replace("min-width:24px;height:24px;line-height:24px", "min-width:30px;height:30px;line-height:30px")
+            .replace("font-size:14px", "font-size:17px"))
+
+
+def cabecalho_corrida(c, p):
+    """Cabeçalho: pista/hora, chips (Race, classe, distância), Classificação geral e Post Pick do site."""
+    borda = "border:1px solid rgba(128,128,128,.35);"
+    titulo = ""
+    if c.get("hora"):
+        titulo = (f"<div style='font-size:1.7rem;font-weight:700;line-height:1.25;margin:4px 0 12px'>"
+                  f"{c['pista']} {c['hora']} (BR {hora_br(c['hora'], True)})</div>")
+    num = str(c.get("num") or "").strip()
+    chips = [f"Race {num}" if num else "", p["classe"], f"{int(p['dist'])}m"]
+    chips_html = "".join(
+        f"<span style='display:inline-block;{borda}background:rgba(128,128,128,.12);border-radius:999px;"
+        f"padding:5px 14px;margin:0 8px 8px 0;font-size:1rem'>{x}</span>" for x in chips if x)
+    sep = "<span style='opacity:.6'>–</span>"
+    ordem = sep.join(badge_g(d["trap"]) for d in p["rank"])
+    pp_nums = re.findall(r"[1-6]", p["pp"] or "")
+    pp_html = ("<span style='opacity:.6'>-</span>" if not pp_nums
+               else "<span style='opacity:.6;margin:0 3px'>-</span>".join(badge_g(n) for n in pp_nums))
+    return (titulo + f"<div>{chips_html}</div>"
+            "<div style='font-size:1.3rem;font-weight:700;margin:10px 0 8px'>Classificação geral</div>"
+            f"<div style='{borda}background:rgba(128,128,128,.08);border-radius:10px;padding:12px 14px'>"
+            f"<div style='display:flex;flex-wrap:wrap;align-items:center;gap:8px'>{ordem}</div>"
+            f"<div style='margin:10px 0 0 10px;font-size:1rem'><span style='opacity:.8'>Post Pick do site:</span> {pp_html}</div>"
+            "</div>")
+
+
+# ---------------------------------------------------------------- colunas travadas ao rolar para o lado
+_JS_TRAVAR = """<script>
+(function () {
+  var win, doc;
+  try { win = window.parent; doc = win.document; } catch (e) { return; }
+
+  // Cores das colunas travadas = cores reais do tema atual (claro/escuro), atualizadas ao trocar o tema
+  var styleId = 'dib-sticky-style';
+  var estilo = doc.getElementById(styleId);
+  if (!estilo) {
+    estilo = doc.createElement('style');
+    estilo.id = styleId;
+    doc.head.appendChild(estilo);
+  }
+  estilo.innerHTML =
+    '.dib-table.sticky-1 td:nth-child(1):not(.sep):not(.sep-avb),' +
+    '.dib-table.sticky-2 td:nth-child(1):not(.sep):not(.sep-avb),' +
+    '.dib-table.sticky-2 td:nth-child(2):not(.sep):not(.sep-avb)' +
+    '{ background-color: var(--dib-bg, #fff) !important; }' +
+    '.dib-table.sticky-1 th:nth-child(1),' +
+    '.dib-table.sticky-2 th:nth-child(1),' +
+    '.dib-table.sticky-2 th:nth-child(2)' +
+    '{ background-color: var(--dib-bg-head, #f0f2f6) !important; }';
+  function cores() {
+    var app = doc.querySelector('.stApp') || doc.body;
+    var m = win.getComputedStyle(app).backgroundColor.match(/[\\d.]+/g);
+    if (!m || m.length < 3 || (m.length > 3 && parseFloat(m[3]) === 0)) return;
+    var r = +m[0], g = +m[1], b = +m[2];
+    function mix(c) { return Math.round(c * 0.9 + 128 * 0.1); }
+    var raiz = doc.documentElement;
+    raiz.style.setProperty('--dib-bg', 'rgb(' + r + ',' + g + ',' + b + ')');
+    raiz.style.setProperty('--dib-bg-head', 'rgb(' + mix(r) + ',' + mix(g) + ',' + mix(b) + ')');
+  }
+  cores();
+  setInterval(cores, 400);
+
+  function travar(tabela, n) {
+    var linhas = tabela.querySelectorAll('tr');
+    if (!linhas.length) return false;
+    var cab = linhas[0].children, lefts = [], i;
+    if (!cab[0] || cab[0].getBoundingClientRect().width === 0) return false;   // tabela escondida
+    for (i = 0; i < n; i++) {
+      if (!cab[i]) return false;
+      lefts.push(i === 0 ? 0 : Math.floor(cab[i].offsetLeft) - 1);
+    }
+    
+    tabela.classList.add('sticky-' + n);
+
+    Array.prototype.forEach.call(linhas, function (tr) {
+      var c0 = tr.children[0];
+      if (!c0 || (c0.colSpan && c0.colSpan > 1)) return;
+      for (var j = 0; j < n && j < tr.children.length; j++) {
+        var c = tr.children[j];
+        c.style.position = 'sticky';
+        c.style.left = lefts[j] + 'px';
+        c.style.zIndex = (c.tagName === 'TH') ? '3' : '2';
+        
+        var sombra = 'inset 0 -1px 0 rgba(128,128,128,.35), inset -1px 0 0 rgba(128,128,128,.45)';
+        if (j === n - 1) sombra += ', 3px 0 4px -2px rgba(0,0,0,.35)';
+        c.style.boxShadow = sombra;
+      }
+    });
+    return true;
+  }
+  function aplicar() {
+    Array.prototype.forEach.call(doc.querySelectorAll('table.dib-table'), function (t) {
+      if (t.getAttribute('data-dibfix') === '1') return;
+      var tr0 = t.querySelector('tr');
+      if (!tr0) return;
+      var cab = Array.prototype.map.call(tr0.children, function (c) {
+        return (c.innerText || '').trim().toLowerCase();
+      });
+      var n = 0;
+      if (cab[0] === 'trap' && cab[1] === 'galgo') n = 2;      // Planilha de Projecao
+      else if (cab[0] === 'avb') n = 1;                         // Planilha de AVB
+      if (n && travar(t, n)) t.setAttribute('data-dibfix', '1');
+    });
+  }
+  [0, 250, 700, 1500, 3000].forEach(function (ms) { setTimeout(aplicar, ms); });
+  try {
+    var obs = new win.MutationObserver(function () { aplicar(); });
+    obs.observe(doc.body, {childList: true, subtree: true});
+    setTimeout(function () { obs.disconnect(); }, 20000);
+  } catch (e) {}
+})();
+</script>"""
+
+
+def fixar_colunas():
+    """Trava (sticky) Trap+Galgo na Planilha de Projeção e AvB na Planilha de AVB ao rolar para o lado."""
+    components.html(_JS_TRAVAR + f"<!-- {time.time()} -->", height=0)
+
+
 def analisar(c, classe_in, dist_in, pp_in):
     p = preparar(c["id"], c["data"], c, classe_in, dist_in, pp_in)
     if not p:
         return
-    st.markdown(titulo_corrida(c, p))
+    st.markdown(cabecalho_corrida(c, p), unsafe_allow_html=True)
     st.markdown("#### Planilha de Projeção")
     st.markdown(dib.tabela_projecao(p["ds"]), unsafe_allow_html=True)
     st.markdown(grafico_predictor(p["ds"]), unsafe_allow_html=True)
     st.markdown(titulo_corrida(c, p))
+    if not p["pp"]:
+        st.caption("Post Pick não encontrado automaticamente. Você pode digitar em ⚙️ Ajustes (ex: 1-2-5).")
+        with st.expander("🔎 Diagnóstico do Post Pick (copie e cole no chat)", expanded=True):
+            diag = buscar_post_pick(c["id"], c["data"])[1]
+            linhas = [f"corrida {c['id']} {c['data']}"]
+            for d_ in diag:
+                linhas.append(f"{d_['Status']} | {d_['Endereço']} | chaves: {d_['Chaves']}")
+                linhas += [f"    {x}" for x in d_["Pistas"]]
+            relatorio = "\n".join(linhas)
+            botao_copiar(relatorio)
+            st.text_area("Relatório:", relatorio, height=200)
+            st.dataframe(pd.DataFrame([{k: v for k, v in d_.items() if k != "Pistas"} for d_ in diag]),
+                         use_container_width=True, hide_index=True)
     dib.tabela_avb(p["s1"], "1ª Planilha — AVB Principal (Prob ≥ 60%)")
     if hasattr(dib, "gerar_observacoes"):
         dib.gerar_observacoes(p["rank"], p["s1"], p["ctx"])
-        
+
     # BOTÃO DE EXPORTAR COM CÓPIA AUTOMÁTICA
     st.markdown("---")
     with st.expander("📋 Exportar Análise (Copiar e Colar para o Chat)"):
         texto_gerado = gerar_texto_analise(c, p)
-        botao_copiar(texto_gerado) # Chama o botão JS
+        botao_copiar(texto_gerado)  # Chama o botão JS
         st.text_area("Se o botão acima não funcionar, copie o texto aqui:", texto_gerado, height=200)
+    fixar_colunas()
 
 
 # ---------------------------------------------------------------- aba Form
@@ -751,9 +1133,19 @@ def mostrar_resultado(c, classe_in, dist_in, pp_in):
 
 
 # ---------------------------------------------------------------- tela
+# Trava a largura da barra lateral no padrao (21rem) e usa letra menor nos botoes das corridas,
+# para o texto com o horario do Brasil caber sem alargar a barra.
+_CSS_SIDEBAR = """<style>
+section[data-testid="stSidebar"]{width:21rem !important;min-width:21rem !important;max-width:21rem !important;}
+section[data-testid="stSidebar"] .stButton > button{padding:.35rem .4rem;min-height:0;}
+section[data-testid="stSidebar"] .stButton > button p{font-size:.85rem;line-height:1.25;}
+</style>"""
+
+
 def main():
     st.title("🐾 DIB GREYHOUND")
 
+    st.markdown(_CSS_SIDEBAR, unsafe_allow_html=True)
     with st.sidebar:
         modo_txt = st.radio("Ver", ["🏁 Corridas", "📊 Resultados"], horizontal=True, label_visibility="collapsed")
         modo = "res" if "Resultados" in modo_txt else "ana"
@@ -794,7 +1186,7 @@ def main():
             st.caption(f"{len(lista)} corridas · horário da pista (Brasil = −3h)")
             for c in lista:
                 ativo = sel and sel.get("id") == c["id"] and sel.get("modo") == modo
-                rotulo = f"{'▶ ' if ativo else ''}{c['hora']} · {c['pista']} R{c['num'] or '?'} · " \
+                rotulo = f"{'▶ ' if ativo else ''}{c['hora']} (BR {hora_br(c['hora'], True)}) · {c['pista']} R{c['num'] or '?'} · " \
                          f"{c['grade'] or '?'} · {c['dist'] or '?'}m"
                 st.button(rotulo, key=f"{modo}_{c['id']}", use_container_width=True,
                           on_click=escolher, args=(c, data_str, modo))
